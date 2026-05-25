@@ -37,13 +37,15 @@ async def test_notify_admin_calls_telegram_api(monkeypatch) -> None:
     monkeypatch.setattr(notify_module.httpx, "AsyncClient", _FakeClient)
 
     try:
-        await notify_module.notify_admin("hello <world>")
+        # ה-caller אחראי על escape פר-ערך. ה-helper לא נוגע במחרוזת
+        # כדי שלא יהרוס tags של עיצוב כמו <b>.
+        await notify_module.notify_admin("<b>bold</b> + safe text")
 
         assert len(captured) == 1
         assert "fake-token" in captured[0]["url"]
         assert captured[0]["json"]["chat_id"] == 12345
-        # HTML escape פעיל — כלל 6 ב-CLAUDE.md
-        assert "&lt;world&gt;" in captured[0]["json"]["text"]
+        # ה-message מועבר as-is — Telegram יציג <b>bold</b> כטקסט מודגש.
+        assert captured[0]["json"]["text"] == "<b>bold</b> + safe text"
         assert captured[0]["json"]["parse_mode"] == "HTML"
     finally:
         get_settings.cache_clear()

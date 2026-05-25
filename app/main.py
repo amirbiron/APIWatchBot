@@ -107,11 +107,12 @@ async def _register_webhook(bot_app: Application, settings: Settings) -> None:
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=False,
     )
-    # רושמים רק את ה-host — ה-path מכיל את ה-secret ואסור שייכנס ללוגים
+    # ה-path כבר לא מכיל secret, אז יותר אין סכנה לדלוף — אבל נשארנו
+    # עם לוג של host בלבד לעקביות.
     from urllib.parse import urlparse
 
     parsed = urlparse(webhook_url)
-    logger.info("telegram.webhook.registered", host=parsed.netloc)
+    logger.info("telegram.webhook.registered", host=parsed.netloc, path=parsed.path)
 
 
 app = FastAPI(
@@ -128,10 +129,11 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# ה-path מכיל את ה-secret כדי להקשות על ניחוש.
-# בנוסף אנחנו מאמתים את הכותרת X-Telegram-Bot-Api-Secret-Token כאמצעי שני.
-@app.post("/telegram/webhook/{secret}")
-async def telegram_webhook(secret: str, request: Request) -> Response:
+# path קבוע. ההגנה היחידה היא X-Telegram-Bot-Api-Secret-Token — header
+# שטלגרם שולח ולא יוצג בלוגי גישה. ה-secret אינו ב-URL כדי שלא ידלוף
+# ללוגים של Render / reverse proxies / monitoring tools.
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request) -> Response:
     """נקודת הקצה שאליה Telegram שולח updates."""
     settings: Settings = request.app.state.settings
     bot_app: Application | None = request.app.state.bot_app
@@ -147,16 +149,10 @@ async def telegram_webhook(secret: str, request: Request) -> Response:
         logger.error("telegram.webhook.misconfigured", reason="empty secret in handler")
         raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE)
 
-    # שתי בדיקות — secret ב-path + header. שתיהן ב-compare_digest כדי להימנע
-    # מ-timing side channel שיאפשר ניחוש הדרגתי. שתיהן רצות תמיד (לא
-    # קצרצרת) כדי שהזמן יישאר קבוע.
-    path_ok = hmac.compare_digest(secret, expected_secret)
+    # אימות יחיד דרך ה-header — Telegram מצרף אותו על בסיס secret_token
+    # שהעברנו ב-setWebhook. compare_digest כדי למנוע timing side channel.
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    header_ok = hmac.compare_digest(header_secret, expected_secret)
-    if not (path_ok and header_ok):
-        # לא רושמים מי משתי הבדיקות נכשלה — מידע פר-בדיקה היה מאפשר
-        # לתוקף שגונב logs לדעת לאיזה ערוץ הוא צריך לכוון את התקיפה
-        # (path vs header), ומחליש את ההגנה הדו-שכבתית.
+    if not hmac.compare_digest(header_secret, expected_secret):
         logger.warning("telegram.webhook.unauthorized")
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN)
 

@@ -30,8 +30,9 @@ def test_telegram_webhook_returns_503_when_bot_not_configured(monkeypatch) -> No
     try:
         with TestClient(app) as client:
             response = client.post(
-                "/telegram/webhook/wrong-secret",
+                "/telegram/webhook",
                 json={"update_id": 1},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"},
             )
         assert response.status_code == 503
     finally:
@@ -39,12 +40,14 @@ def test_telegram_webhook_returns_503_when_bot_not_configured(monkeypatch) -> No
 
 
 def test_settings_paths_are_derived() -> None:
-    """webhook path חייב להיגזר נכון מ-secret."""
+    """webhook path קבוע — secret עובר רק דרך header. URL = base + path."""
     from app.config import Settings
 
     s = Settings(telegram_webhook_secret="abc123", telegram_webhook_base_url="https://example.com")
-    assert s.telegram_webhook_path == "/telegram/webhook/abc123"
-    assert s.telegram_webhook_url == "https://example.com/telegram/webhook/abc123"
+    assert s.telegram_webhook_path == "/telegram/webhook"
+    assert s.telegram_webhook_url == "https://example.com/telegram/webhook"
+    # ה-secret אינו ב-URL — חשוב שלא ידלוף ללוגי גישה.
+    assert "abc123" not in (s.telegram_webhook_url or "")
 
 
 def test_settings_without_base_url_returns_none() -> None:

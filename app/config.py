@@ -41,15 +41,20 @@ class Settings(BaseSettings):
 
     @property
     def telegram_webhook_path(self) -> str | None:
-        """ה-path המקומי שאליו Telegram יפנה. ה-secret בתוך ה-path מקשה על ניחוש.
+        """ה-path המקומי שאליו Telegram יפנה. path קבוע — האימות
+        מתבצע דרך ה-header X-Telegram-Bot-Api-Secret-Token (compare_digest).
 
-        מחזיר None אם אין secret — אסור לרשום webhook ללא secret כי זה גם
-        חושף את הבוט להזרקת updates וגם שובר את ה-route המוגדר כ-{secret}.
+        עברנו מ-path מבוסס-secret ל-path קבוע כדי שה-secret לא ידלוף
+        ללוגי גישה של Render / reverse proxy שמתעדים URLs. ה-header מספק
+        אימות שווה ערך — זו ההמלצה הרשמית של Telegram.
+
+        מחזיר None אם אין secret מוגדר — אסור לרשום webhook ללא הגנת
+        secret_token. ההגדרה של telegram_configured כבר אוכפת זאת
+        גלובלית; ה-בדיקה כאן היא הגנת רוחב.
         """
-        secret = self.telegram_webhook_secret.get_secret_value()
-        if not secret:
+        if not self.telegram_webhook_secret.get_secret_value():
             return None
-        return f"/telegram/webhook/{secret}"
+        return "/telegram/webhook"
 
     @property
     def telegram_webhook_url(self) -> str | None:

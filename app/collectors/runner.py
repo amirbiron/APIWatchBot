@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -197,7 +198,11 @@ class CollectorRunner:
 
         # התראה רק על הכשל ה-3 בדיוק — אחר כך שקט עד שמתאפס וחוזר ל-3.
         if consecutive == _ALERT_AT_CONSECUTIVE_FAILURES:
+            # escape פר-ערך (כלל 6 ב-CLAUDE.md). ה-<b>...</b> סביב escape
+            # נשאר כ-tag פעיל; ערך פנימי עם < או & יישלח כטקסט בטוח.
+            safe_name = html.escape(source.name_he)
+            safe_key = html.escape(source.source_key)
             await notify_admin(
-                f"⚠️ ה-collector של <b>{source.name_he}</b> "
-                f"({source.source_key}) נכשל {consecutive} פעמים ברצף."
+                f"⚠️ ה-collector של <b>{safe_name}</b> "
+                f"({safe_key}) נכשל {consecutive} פעמים ברצף."
             )

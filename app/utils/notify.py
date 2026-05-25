@@ -3,11 +3,14 @@
 הסיבה להימנע מ-PTB Application: ה-worker רץ כprocess נפרד מ-FastAPI,
 ויצירת Application שני באותו bot תתנגש עם ה-webhook (כפילות).
 שימוש ישיר ב-Bot API נקי, חסר state, ו-fire-and-forget.
+
+כלל 6 ב-CLAUDE.md (escape): אחריות ה-caller להעביר message שהוא
+HTML-safe. אם הקורא מטמיע ערך משתמש או DB, עליו לקרוא ל-html.escape
+על *הערך המוטמע*, לא על המחרוזת השלמה — אחרת tags כמו <b> שכוונו
+לעיצוב יומרו ל-&lt;b&gt; ויוצגו כטקסט.
 """
 
 from __future__ import annotations
-
-import html
 
 import httpx
 
@@ -21,15 +24,15 @@ _NOTIFY_TIMEOUT = 10.0
 
 
 async def notify_admin(message: str) -> None:
-    """שולח הודעה ל-ADMIN_TELEGRAM_ID. fire-and-forget.
+    """שולח הודעת HTML ל-ADMIN_TELEGRAM_ID. fire-and-forget.
 
     אם הקונפיג חסר (admin_id או token) — לוג בלבד, לא שגיאה.
     אם ה-API נכשל — לוג בלבד; אסור שכשל בהתראה יפיל את הקורא
     (collector שאחראי על מילוי מאגר הנתונים).
 
-    כלל 6 ב-CLAUDE.md: ה-message מתקבל ממקור פנימי (קוד שלנו) אבל
-    מבטיחים escape ל-HTML למקרה שיוטמע ערך שמכיל `<` או `&`
-    (לדוגמה שם source עם תווים מיוחדים).
+    `message` חייב להיות HTML תקין מבחינת Telegram. ערכים מוטמעים
+    (שמות מקורות, הודעות שגיאה) חייבים להיות מוגנים ע"י html.escape
+    *לפני* ההטמעה.
     """
     settings = get_settings()
     if not settings.admin_notify_configured:
@@ -44,7 +47,7 @@ async def notify_admin(message: str) -> None:
 
     payload = {
         "chat_id": settings.admin_telegram_id,
-        "text": html.escape(message),
+        "text": message,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
