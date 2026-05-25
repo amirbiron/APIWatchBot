@@ -22,7 +22,13 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """מנהל את מחזור החיים: startup → yield → shutdown."""
+    """מנהל את מחזור החיים: startup → yield → shutdown.
+
+    חשוב: כל רכישת משאב מתבצעת בתוך ה-try, ומסומנת ב-flag נפרד. אם
+    שלב מתקדם בתהליך ה-startup נכשל (למשל register_webhook אחרי שכבר
+    הפעלנו את ה-bot processor), ה-finally עדיין רץ ומשחרר כל מה שנתפס
+    בפועל — אין משאב שדולף וה-process יכול לצאת נקי.
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -30,36 +36,58 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("app.startup", environment=settings.environment)
 
-    # MongoDB — אופציונלי בפיתוח. בפרוד חייב לעבוד.
-    if settings.mongodb_configured:
-        db = await connect_to_mongo()
-        await ensure_indexes(db)
-    else:
-        logger.warning("app.startup.mongo.skipped", reason="MONGODB_URI חסר")
-
-    # Telegram bot — גם אופציונלי בפיתוח.
     bot_app: Application | None = None
-    if settings.telegram_configured:
-        bot_app = build_application()
-        await bot_app.initialize()
-        await bot_app.start()
-        await _register_webhook(bot_app, settings)
-    else:
-        logger.warning("app.startup.telegram.skipped", reason="TELEGRAM_BOT_TOKEN חסר")
+    # flags שמתעדים בדיוק מה הצליח, כדי שה-cleanup יעשה רק את מה שצריך
+    mongo_connected = False
+    bot_initialized = False
+    bot_started = False
 
-    # שמירה ב-app.state כדי שה-route יוכל לגשת
-    app.state.bot_app = bot_app
+    # שומרים גם במצב התחלתי כדי שה-route יקבל ערך גם אם startup נכשל מוקדם
+    app.state.bot_app = None
     app.state.settings = settings
 
     try:
+        # MongoDB — אופציונלי בפיתוח. בפרוד חייב לעבוד.
+        if settings.mongodb_configured:
+            db = await connect_to_mongo()
+            mongo_connected = True
+            await ensure_indexes(db)
+        else:
+            logger.warning("app.startup.mongo.skipped", reason="MONGODB_URI חסר")
+
+        # Telegram bot — גם אופציונלי בפיתוח.
+        if settings.telegram_configured:
+            bot_app = build_application()
+            await bot_app.initialize()
+            bot_initialized = True
+            await bot_app.start()
+            bot_started = True
+            await _register_webhook(bot_app, settings)
+            app.state.bot_app = bot_app
+        else:
+            logger.warning("app.startup.telegram.skipped", reason="TELEGRAM_BOT_TOKEN חסר")
+
         yield
     finally:
         logger.info("app.shutdown")
-        if bot_app is not None:
-            await bot_app.stop()
-            await bot_app.shutdown()
-        if settings.mongodb_configured:
-            await close_mongo_connection()
+
+        # שחרור משאבים בסדר הפוך לרכישה. כל שלב עטוף בנפרד כדי שכשל
+        # באחד לא ימנע ניקוי של האחרים.
+        if bot_started and bot_app is not None:
+            try:
+                await bot_app.stop()
+            except Exception:
+                logger.exception("app.shutdown.bot_stop_failed")
+        if bot_initialized and bot_app is not None:
+            try:
+                await bot_app.shutdown()
+            except Exception:
+                logger.exception("app.shutdown.bot_shutdown_failed")
+        if mongo_connected:
+            try:
+                await close_mongo_connection()
+            except Exception:
+                logger.exception("app.shutdown.mongo_close_failed")
 
 
 async def _register_webhook(bot_app: Application, settings: Settings) -> None:

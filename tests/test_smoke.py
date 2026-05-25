@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, lifespan
 
 
 def test_health_endpoint_returns_ok() -> None:
@@ -51,6 +52,52 @@ def test_settings_without_secret_returns_none() -> None:
     s = Settings(telegram_webhook_secret="", telegram_webhook_base_url="https://example.com")
     assert s.telegram_webhook_path is None
     assert s.telegram_webhook_url is None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_cleans_up_on_startup_failure(monkeypatch) -> None:
+    """אם startup נכשל באמצע (אחרי שמשאבים נתפסו), ה-finally חייב לרוץ
+    ולשחרר אותם. בלי זה — process leak ב-prod כשרישום webhook נכשל."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("MONGODB_URI", "mongodb://fake")
+
+    # ניקוי cache של get_settings — אחרת ENV החדש לא נטען
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    from app import main as main_module
+
+    cleanup_calls: list[str] = []
+
+    async def fake_close_mongo() -> None:
+        cleanup_calls.append("mongo_closed")
+
+    async def fake_connect() -> object:
+        cleanup_calls.append("mongo_connected")
+        return object()
+
+    async def fake_ensure_indexes(db: object) -> None:
+        raise RuntimeError("simulated index failure mid-startup")
+
+    monkeypatch.setattr(main_module, "connect_to_mongo", fake_connect)
+    monkeypatch.setattr(main_module, "ensure_indexes", fake_ensure_indexes)
+    monkeypatch.setattr(main_module, "close_mongo_connection", fake_close_mongo)
+
+    from fastapi import FastAPI
+
+    dummy_app = FastAPI()
+    try:
+        with pytest.raises(RuntimeError, match="simulated"):
+            async with lifespan(dummy_app):
+                pass  # pragma: no cover — לא אמורים להגיע ל-yield
+
+        # זה הלב של הבדיקה — אסור ש-mongo יישאר פתוח אחרי כשל startup
+        assert "mongo_connected" in cleanup_calls
+        assert "mongo_closed" in cleanup_calls
+    finally:
+        # החזרת המצב הראשוני כדי לא להשפיע על בדיקות אחרות
+        get_settings.cache_clear()
 
 
 def test_telegram_configured_requires_all_three() -> None:
