@@ -64,20 +64,46 @@ class CollectorRunner:
         self._db = db
 
     async def run_all(self) -> RunSummary:
-        """מריץ את כל המקורות במקביל. תמיד מחזיר RunSummary — לא זורק."""
+        """מריץ את כל המקורות במקביל. **תמיד מחזיר RunSummary — לא זורק.**
+
+        return_exceptions=True מבטיח שאם _run_one חרג מ-no-throw שלו
+        (באג עתידי / קוד חדש לפני ה-try), gather לא מפיץ. ממירים את
+        ה-exception ל-SourceResult עם error מתאים — כך ש-APScheduler
+        ימשיך, וה-admin יראה כשל ב-summary במקום job שמת בשקט.
+        """
         started_at = datetime.now(timezone.utc)
         logger.info("collector.run.start", source_count=len(self._sources))
 
-        results = await asyncio.gather(
+        raw_results = await asyncio.gather(
             *(self._run_one(source) for source in self._sources),
-            return_exceptions=False,  # _run_one כבר תופס הכל
+            return_exceptions=True,
         )
+
+        results: list[SourceResult] = []
+        for source, raw in zip(self._sources, raw_results):
+            if isinstance(raw, BaseException):
+                logger.error(
+                    "collector.source.run_one_raised",
+                    api_id=source.api_id,
+                    error_type=type(raw).__name__,
+                    # logger.exception לא תופס traceback מחוץ ל-except —
+                    # מעבירים ידנית. ראה תיקון דומה ב-AIProcessor.
+                    exc_info=(type(raw), raw, raw.__traceback__),
+                )
+                results.append(
+                    SourceResult(
+                        api_id=source.api_id,
+                        error=f"unexpected_raise: {type(raw).__name__}: {raw}",
+                    )
+                )
+            else:
+                results.append(raw)
 
         finished_at = datetime.now(timezone.utc)
         summary = RunSummary(
             started_at=started_at,
             finished_at=finished_at,
-            results=list(results),
+            results=results,
         )
 
         # שמירת מטא ב-system_state — שימושי לאדמין ולבדיקה ידנית.

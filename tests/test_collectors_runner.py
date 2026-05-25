@@ -105,6 +105,39 @@ async def test_runner_updates_system_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_survives_unexpected_exception_in_run_one(monkeypatch) -> None:
+    """אם _run_one זרק (באג עתידי / קוד חדש לפני ה-try), gather עם
+    return_exceptions=True מבטיח שה-job לא נופל ב-APScheduler.
+    ה-source מסומן ככשל ב-summary והאחרים ממשיכים."""
+    db = await _fresh_db()
+    good = _FakeSource(
+        [RawItem(api_id="fake", raw_title="t", raw_content="c", source_url="https://x")]
+    )
+    bad = _FakeSource(
+        [RawItem(api_id="fake", raw_title="t", raw_content="c", source_url="https://x")]
+    )
+    bad.api_id = "boomer"
+    bad.name_he = "Boomer"
+
+    runner = CollectorRunner(sources=[good, bad], db=db)
+
+    # monkeypatch _run_one שיזרוק רק על "boomer"
+    real_run_one = runner._run_one
+
+    async def boom_on_boomer(source):
+        if source.api_id == "boomer":
+            raise RuntimeError("simulated bug in _run_one")
+        return await real_run_one(source)
+
+    monkeypatch.setattr(runner, "_run_one", boom_on_boomer)
+
+    # ה-batch לא נופל למרות שה-_run_one זרק על אחד המקורות
+    summary = await runner.run_all()
+    assert summary.total_inserted == 1  # ה-good הצליח
+    assert "boomer" in summary.failed_sources
+
+
+@pytest.mark.asyncio
 async def test_runner_run_all_does_not_throw_on_state_write_failure() -> None:
     """run_all חייב להחזיר RunSummary גם אם ה-system_state write נכשל.
     APScheduler היה מסמן את ה-job כ-failed וגורם ל-retry/alert מיותרים."""
