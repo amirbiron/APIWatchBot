@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import AsyncIterator
@@ -78,7 +79,11 @@ async def _register_webhook(bot_app: Application, settings: Settings) -> None:
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=False,
     )
-    logger.info("telegram.webhook.registered", url=webhook_url)
+    # רושמים רק את ה-host — ה-path מכיל את ה-secret ואסור שייכנס ללוגים
+    from urllib.parse import urlparse
+
+    parsed = urlparse(webhook_url)
+    logger.info("telegram.webhook.registered", host=parsed.netloc)
 
 
 app = FastAPI(
@@ -106,17 +111,27 @@ async def telegram_webhook(secret: str, request: Request) -> Response:
     if bot_app is None:
         raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail="bot not configured")
 
+    # אם הגענו לכאן אז telegram_configured=True, כלומר ה-secret מוגדר.
+    # אסור לדלג על האימות בשום תרחיש — בלי secret מאומת = אסור לעבד את ה-update.
     expected_secret = settings.telegram_webhook_secret.get_secret_value()
-    if expected_secret:
-        # בדיקה ראשונה — secret ב-path
-        if secret != expected_secret:
-            logger.warning("telegram.webhook.unauthorized", reason="bad path secret")
-            raise HTTPException(status_code=HTTPStatus.FORBIDDEN)
-        # בדיקה שנייה — header שטלגרם מוסיף
-        header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if header_secret != expected_secret:
-            logger.warning("telegram.webhook.unauthorized", reason="bad header secret")
-            raise HTTPException(status_code=HTTPStatus.FORBIDDEN)
+    if not expected_secret:
+        # הגנת רוחב — לא אמור לקרות אם config נכון, אבל לא נסכן.
+        logger.error("telegram.webhook.misconfigured", reason="empty secret in handler")
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    # שתי בדיקות — secret ב-path + header. שתיהן ב-compare_digest כדי להימנע
+    # מ-timing side channel שיאפשר ניחוש הדרגתי.
+    path_ok = hmac.compare_digest(secret, expected_secret)
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    header_ok = hmac.compare_digest(header_secret, expected_secret)
+    if not (path_ok and header_ok):
+        logger.warning(
+            "telegram.webhook.unauthorized",
+            reason="bad secret",
+            path_ok=path_ok,
+            header_ok=header_ok,
+        )
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN)
 
     try:
         payload = await request.json()

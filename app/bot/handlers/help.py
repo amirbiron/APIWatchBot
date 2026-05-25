@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.logging_config import get_logger
+from app.utils import anon_user_id
 
 logger = get_logger(__name__)
 
@@ -31,7 +32,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if user is None or update.message is None:
         return
 
-    logger.info("bot.command.help", telegram_id=user.id)
+    logger.info("bot.command.help", user_hash=anon_user_id(user.id))
 
     await update.message.reply_text(
         HELP_MESSAGE,

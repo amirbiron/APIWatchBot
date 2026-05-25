@@ -38,13 +38,21 @@ def build_scheduler(
     )
 
     if run_at_startup:
-        # job חד-פעמי שירוץ מיד אחרי scheduler.start()
+        # job חד-פעמי שירוץ מיד אחרי scheduler.start().
+        # חשוב: APScheduler מפרש datetime *naive* בטיימזון של ה-scheduler
+        # (Asia/Jerusalem), כך שעל שרת UTC זה היה הופך לזמן בעבר ונדחה
+        # ע"י misfire_grace_time הדיפולטיבי. לכן יוצרים datetime tz-aware.
         from datetime import datetime, timedelta
+
+        import pytz
+
+        tz = pytz.timezone(timezone)
+        run_date = datetime.now(tz) + timedelta(seconds=5)
 
         scheduler.add_job(
             runner.run_all,
             trigger="date",
-            run_date=datetime.now() + timedelta(seconds=5),
+            run_date=run_date,
             id="collect_all_startup",
             name="collect_all_startup",
             max_instances=1,

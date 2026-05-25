@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+def _utcnow() -> datetime:
+    """datetime tz-aware ב-UTC. mongodb client שלנו נטען עם tz_aware=True,
+    אז כל datetime ש-default-factory יוצר חייב להיות aware כדי שהשוואות
+    ('updated_at > X') לא יזרקו TypeError."""
+    return datetime.now(timezone.utc)
 
 # רמת חומרה מינימלית שמשתמש מוכן לקבל
 Severity = Literal["critical", "important", "all"]
@@ -34,8 +41,8 @@ class User(BaseModel):
     receive_urgent_alerts: bool = True
 
     # מטא
-    registered_at: datetime = Field(default_factory=datetime.utcnow)
-    last_active_at: datetime = Field(default_factory=datetime.utcnow)
+    registered_at: datetime = Field(default_factory=_utcnow)
+    last_active_at: datetime = Field(default_factory=_utcnow)
     paused: bool = False
 
     # מצב שיחה (לפלואו הרישום האינטראקטיבי בשלב 4)

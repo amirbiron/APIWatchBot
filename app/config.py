@@ -40,23 +40,35 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Jerusalem"
 
     @property
-    def telegram_webhook_path(self) -> str:
-        """ה-path המקומי שאליו Telegram יפנה. ה-secret בתוך ה-path מקשה על ניחוש."""
+    def telegram_webhook_path(self) -> str | None:
+        """ה-path המקומי שאליו Telegram יפנה. ה-secret בתוך ה-path מקשה על ניחוש.
+
+        מחזיר None אם אין secret — אסור לרשום webhook ללא secret כי זה גם
+        חושף את הבוט להזרקת updates וגם שובר את ה-route המוגדר כ-{secret}.
+        """
         secret = self.telegram_webhook_secret.get_secret_value()
-        return f"/telegram/webhook/{secret}" if secret else "/telegram/webhook"
+        if not secret:
+            return None
+        return f"/telegram/webhook/{secret}"
 
     @property
     def telegram_webhook_url(self) -> str | None:
-        """URL מלא לרישום מול Telegram — None אם חסר base URL."""
-        if not self.telegram_webhook_base_url:
+        """URL מלא לרישום מול Telegram — None אם חסר base URL או secret."""
+        path = self.telegram_webhook_path
+        if not self.telegram_webhook_base_url or path is None:
             return None
         base = self.telegram_webhook_base_url.rstrip("/")
-        return f"{base}{self.telegram_webhook_path}"
+        return f"{base}{path}"
 
     @property
     def telegram_configured(self) -> bool:
-        """האם יש לנו מספיק נתונים כדי להפעיל את הבוט."""
-        return bool(self.telegram_bot_token.get_secret_value())
+        """דורש את שלושת הרכיבים: token, base URL, וsecret. בלי שלושתם
+        לא נפעיל את הבוט — עדיף שלא לרוץ מאשר לרוץ עם הגנה חסרה."""
+        return (
+            bool(self.telegram_bot_token.get_secret_value())
+            and bool(self.telegram_webhook_base_url)
+            and bool(self.telegram_webhook_secret.get_secret_value())
+        )
 
     @property
     def mongodb_configured(self) -> bool:

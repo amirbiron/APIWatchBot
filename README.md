@@ -20,7 +20,7 @@
 
 ## מבנה הפרויקט
 
-```
+```text
 APIWatchBot/
 ├── app/                    # FastAPI app + Telegram webhook
 │   ├── bot/                # handlers של הבוט

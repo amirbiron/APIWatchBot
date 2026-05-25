@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+def _utcnow() -> datetime:
+    """tz-aware UTC — תואם ל-mongo client עם tz_aware=True."""
+    return datetime.now(timezone.utc)
 
 Severity = Literal["critical", "important", "info"]
 UpdateStatus = Literal["raw", "processed", "failed", "skipped_noise"]
@@ -41,7 +46,7 @@ class Update(BaseModel):
     categories: list[Category] = Field(default_factory=list)
 
     # מטא
-    collected_at: datetime = Field(default_factory=datetime.utcnow)
+    collected_at: datetime = Field(default_factory=_utcnow)
     processed_at: datetime | None = None
 
     status: UpdateStatus = "raw"

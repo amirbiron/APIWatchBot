@@ -9,6 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.logging_config import get_logger
+from app.utils import anon_user_id
 
 logger = get_logger(__name__)
 
@@ -32,8 +33,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user is None or update.message is None:
         return
 
-    logger.info(
-        "bot.command.start",
+    # INFO — רק hash אנונימי. פרטים מזהים ב-DEBUG בלבד.
+    logger.info("bot.command.start", user_hash=anon_user_id(user.id))
+    logger.debug(
+        "bot.command.start.details",
         telegram_id=user.id,
         username=user.username,
     )
