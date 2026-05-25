@@ -73,3 +73,26 @@ class DeliveryRepository:
         )
         delivered = await cursor.to_list(length=None)
         return {d["update_id"] for d in delivered}
+
+    async def release(
+        self,
+        user_id: Any,
+        update_ids: list[Any],
+        delivery_type: DeliveryType,
+    ) -> int:
+        """מבטל claims שלא הצלחנו לעמוד בהם (לדוגמה: weekly digest
+        שהשליחה שלו נכשלה). מחזיר מספר הרשומות שנמחקו.
+
+        הגבלה לפי delivery_type חשובה — אם פריט נשלח קודם כ-urgent
+        ועכשיו ניסיון weekly נכשל, אסור למחוק את ה-urgent delivery.
+        """
+        if not update_ids:
+            return 0
+        result = await self._db.deliveries.delete_many(
+            {
+                "user_id": user_id,
+                "update_id": {"$in": update_ids},
+                "delivery_type": delivery_type,
+            }
+        )
+        return result.deleted_count

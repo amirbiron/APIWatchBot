@@ -15,11 +15,14 @@ from app.dispatcher.weekly import WeeklyDispatcher
 
 
 class _FakeSender:
-    def __init__(self) -> None:
+    def __init__(self, fail: bool = False) -> None:
         self.sent: list[tuple[int, str]] = []
+        self._fail = fail
 
     async def send(self, chat_id: int, text: str) -> SendResult:
         self.sent.append((chat_id, text))
+        if self._fail:
+            return SendResult(success=False, status="error")
         return SendResult(success=True, status="sent")
 
 
@@ -239,6 +242,64 @@ async def test_weekly_digest_excludes_items_claimed_concurrently() -> None:
         {"user_id": user_id, "delivery_type": "weekly_digest"}
     )
     assert delivered == 1
+
+
+@pytest.mark.asyncio
+async def test_weekly_releases_claims_on_send_failure() -> None:
+    """אם sender.send נכשל — ה-claims שיצרנו חייבים להישחרר, אחרת
+    הפריטים אבודים לנצח (get_delivered_update_ids יסנן אותם בריצה
+    הבאה כאילו נשלחו)."""
+    db = await _fresh_db()
+    failing_sender = _FakeSender(fail=True)
+
+    user_id = await _insert_user(db, 1, subscribed=["render"])
+    await _insert_processed_update(db, "render", severity="critical")
+    await _insert_processed_update(db, "render", severity="important")
+
+    summary = await WeeklyDispatcher(db=db, sender=failing_sender).run()
+
+    assert summary.send_failures == 1
+    assert summary.digests_sent == 0
+    # ה-claims שוחררו — אין delivery rows עבור המשתמש הזה
+    delivered = await db.deliveries.count_documents(
+        {"user_id": user_id, "delivery_type": "weekly_digest"}
+    )
+    assert delivered == 0
+
+
+@pytest.mark.asyncio
+async def test_weekly_release_only_affects_weekly_not_urgent() -> None:
+    """אם פריט נשלח קודם כ-urgent (delivery_type="urgent"), שחרור
+    weekly אחרי כשל לא ימחק את ה-urgent delivery."""
+    db = await _fresh_db()
+    failing_sender = _FakeSender(fail=True)
+
+    user_id = await _insert_user(db, 1, subscribed=["render"])
+    urgent_id = await _insert_processed_update(db, "render", severity="critical")
+    # מסמנים שכבר נשלח כ-urgent
+    await db.deliveries.insert_one(
+        {
+            "user_id": user_id,
+            "update_id": urgent_id,
+            "delivery_type": "urgent",
+            "sent_at": datetime.now(timezone.utc),
+        }
+    )
+    # פריט נוסף שינסה להישלח כ-weekly
+    await _insert_processed_update(db, "render", severity="important")
+
+    await WeeklyDispatcher(db=db, sender=failing_sender).run()
+
+    # ה-urgent delivery עדיין קיים
+    urgent_rows = await db.deliveries.count_documents(
+        {"user_id": user_id, "delivery_type": "urgent"}
+    )
+    assert urgent_rows == 1
+    # אין weekly deliveries (שוחררו אחרי כשל)
+    weekly_rows = await db.deliveries.count_documents(
+        {"user_id": user_id, "delivery_type": "weekly_digest"}
+    )
+    assert weekly_rows == 0
 
 
 @pytest.mark.asyncio

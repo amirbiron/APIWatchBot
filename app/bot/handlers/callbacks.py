@@ -150,22 +150,31 @@ async def _handle_severity(query, repo, user_id: int, value: str) -> None:
             "selecting_frequency",
             extra={"min_severity": value},
         )
+        # אם ה-state השתנה בינתיים (race עם /start חוזר וכו') — set
+        # לא עדכן כלום ו-updated הוא None. אסור לקדם את ה-UI כי המצב
+        # ב-DB לא מסתנכרן עם מה שאנחנו מציגים.
+        if updated is None:
+            await query.answer()
+            return
         await query.edit_message_text(
             "👍 עכשיו <b>באיזו תדירות</b>?",
             parse_mode="HTML",
             reply_markup=build_frequency_keyboard(
-                (updated or {}).get("frequency", "weekly")
+                updated.get("frequency", "weekly")
             ),
         )
     else:
         # שתי הפעולות באותו document update — אטומי. בלי זה,
         # כשל בין השניים היה מותיר את המשתמש ב-conversation_state=
         # selecting_severity עם min_severity חדש אבל בלי דרך לצאת.
-        await repo.set_conversation_state(
+        updated = await repo.set_conversation_state(
             user_id,
             "idle",
             extra={"min_severity": value},
         )
+        if updated is None:
+            await query.answer()
+            return
         await query.edit_message_text(
             f"✅ רמת החומרה עודכנה ל-<b>{value}</b>. /settings לסיכום.",
             parse_mode="HTML",
@@ -183,14 +192,19 @@ async def _handle_frequency(query, repo, user_id: int, value: str) -> None:
         await query.answer()
         return
 
-    await repo.set_conversation_state(
+    updated = await repo.set_conversation_state(
         user_id, "confirming", extra={"frequency": value}
     )
+    if updated is None:
+        # race — ה-state השתנה. לא מקדמים את ה-UI.
+        await query.answer()
+        return
+
     await query.edit_message_text(
         "👍 שלב אחרון: <b>האם לקבל התראה מיידית</b> כשמשהו דחוף קורה "
         "(לדוגמה deprecation שתופס לתוקף תוך כמה ימים)?",
         parse_mode="HTML",
-        reply_markup=build_urgent_keyboard(doc.get("receive_urgent_alerts")),
+        reply_markup=build_urgent_keyboard(updated.get("receive_urgent_alerts")),
     )
     await query.answer()
 

@@ -81,3 +81,28 @@ async def test_get_delivered_empty_input_returns_empty() -> None:
     repo, _ = await _fresh_repo()
     result = await repo.get_delivered_update_ids(ObjectId(), [])
     assert result == set()
+
+
+@pytest.mark.asyncio
+async def test_release_removes_only_matching_type() -> None:
+    """release לפי delivery_type — אסור לגעת ב-deliveries אחרים."""
+    repo, db = await _fresh_repo()
+    user_id = ObjectId()
+    weekly_id = ObjectId()
+    urgent_id = ObjectId()
+
+    await repo.try_claim(user_id, weekly_id, "weekly_digest")
+    await repo.try_claim(user_id, urgent_id, "urgent")
+
+    released = await repo.release(user_id, [weekly_id, urgent_id], "weekly_digest")
+    assert released == 1
+    # ה-urgent עדיין שם
+    assert await db.deliveries.count_documents(
+        {"user_id": user_id, "delivery_type": "urgent"}
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_empty_input_returns_zero() -> None:
+    repo, _ = await _fresh_repo()
+    assert await repo.release(ObjectId(), [], "weekly_digest") == 0

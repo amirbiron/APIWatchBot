@@ -164,7 +164,9 @@ class WeeklyDispatcher:
         if message is None:
             return
 
-        # שלח (ייתכן בכמה חלקים אם ארוך)
+        # שלח (ייתכן בכמה חלקים אם ארוך). אם נכשל — משחררים את ה-claims
+        # כדי שלא נאבד את הפריטים לעולם. הסיכון של double-send בריצה הבאה
+        # מקובל יותר מאשר under-deliver שקט של אצוות שלמה של עדכונים.
         chunks = split_long_message(message)
         send_failed = False
         for chunk in chunks:
@@ -176,6 +178,22 @@ class WeeklyDispatcher:
 
         if send_failed:
             summary.send_failures += 1
+            try:
+                released = await self._delivery_repo.release(
+                    user_id=user["_id"],
+                    update_ids=[item["_id"] for item in claimed_items],
+                    delivery_type="weekly_digest",
+                )
+                logger.info(
+                    "weekly.release.on_send_failure",
+                    user_hash=str(user.get("telegram_id"))[:6],
+                    released=released,
+                )
+            except Exception:
+                logger.exception(
+                    "weekly.release_failed",
+                    user_hash=str(user.get("telegram_id"))[:6],
+                )
         else:
             summary.digests_sent += 1
 
