@@ -46,6 +46,11 @@ class WeeklyRunSummary:
     users_with_content: int = 0
     digests_sent: int = 0
     send_failures: int = 0
+    # שגיאה ברמת ה-run (לא send failure פר-משתמש). משמש בעיקר את
+    # run_for_telegram_id כדי שהאדמין יקבל הודעה מדויקת. ערכים אפשריים:
+    # None | "db_error" | "unexpected". send_failures לעומת זאת — claims
+    # שוחררו בוודאות (ראה _dispatch_for_user).
+    error: str | None = None
 
 
 class WeeklyDispatcher:
@@ -113,6 +118,7 @@ class WeeklyDispatcher:
             user = await self._db.users.find_one({"telegram_id": telegram_id})
         except Exception:
             logger.exception("weekly.manual.fetch_user_failed")
+            summary.error = "db_error"
             summary.finished_at = datetime.now(timezone.utc)
             return summary
 
@@ -127,11 +133,15 @@ class WeeklyDispatcher:
         try:
             await self._dispatch_for_user(user, cutoff, date_range, summary)
         except Exception:
+            # חריגה לא-צפויה ב-_dispatch_for_user (לא send failure רגיל).
+            # send failure רגיל נתפס בתוך _dispatch_for_user ושם משחררים
+            # claims. אם הגענו לכאן — ייתכן ש-claims נשארו תקועים, ולא
+            # נכון לדווח "claims שוחררו". משתמשים בשדה error נפרד.
             logger.exception(
                 "weekly.manual.user_unexpected",
                 user_hash=str(telegram_id)[:6],
             )
-            summary.send_failures += 1
+            summary.error = "unexpected"
 
         summary.finished_at = datetime.now(timezone.utc)
         logger.info(

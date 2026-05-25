@@ -62,6 +62,21 @@ async def test_weekly_handler(
     finally:
         await sender.close()
 
+    # סדר הבדיקות חשוב: error קודם (db_error / unexpected) — אחרת
+    # users_checked=0 בעקבות כשל DB היה נראה כמו "משתמש לא נמצא".
+    if summary.error == "db_error":
+        await update.message.reply_text(
+            "⚠️ שגיאת DB בעת טעינת המשתמש. בדוק לוגים."
+        )
+        return
+
+    if summary.error == "unexpected":
+        await update.message.reply_text(
+            "❌ שגיאה לא-צפויה בזמן הריצה. ייתכן שיש claims תקועים "
+            "ב-deliveries — בדוק לוגים לפני ניסיון חוזר."
+        )
+        return
+
     if summary.users_checked == 0:
         await update.message.reply_text(
             "ℹ️ לא נמצא משתמש עם ה-telegram_id הזה ב-DB."
@@ -74,6 +89,8 @@ async def test_weekly_handler(
             "ה-cron הקרוב לא יחזור עליהם.)"
         )
     elif summary.send_failures > 0:
+        # send_failures מוגדל רק במסלול שבו _dispatch_for_user תפס כשל
+        # שליחה ושחרר claims בעצמו. חריגות לא-צפויות יוצאות במסלול error.
         await update.message.reply_text(
             "❌ ניסיון השליחה נכשל. ה-claims שוחררו — אפשר לנסות שוב."
         )
