@@ -334,6 +334,40 @@ async def test_severity_callback_outside_initial_saves_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_severity_standalone_writes_atomically(monkeypatch) -> None:
+    """שינוי min_severity ומעבר ל-idle חייבים להתבצע ב-write אחד דרך
+    set_conversation_state(extra=...). הבעיה הקודמת: 2 קריאות נפרדות
+    (update_settings ואז set_conversation_state) — כשל בין השניים
+    מותיר את המשתמש תקוע ב-selecting_severity עם min_severity חדש."""
+    from app.bot.handlers.callbacks import callback_router
+
+    ctx, repo, _ = await _make_context_with_user()
+    await repo.get_or_create(telegram_id=42)
+    await repo.set_conversation_state(42, "selecting_severity")
+
+    # ה-handler החדש לא קורא ל-update_settings — אם כן, הבדיקה תכשל.
+    update_settings_called = {"n": 0}
+    real_update = repo.update_settings
+
+    async def fake_update_settings(*args, **kwargs):
+        update_settings_called["n"] += 1
+        return await real_update(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "update_settings", fake_update_settings)
+
+    cb = _FakeCallbackQuery(data="sev:critical", from_user=_FakeUser(id=42))
+    await callback_router(
+        _FakeUpdate(effective_user=None, callback_query=cb), ctx
+    )
+
+    # אטומיות: שני השדות עודכנו, ו-update_settings לא נקרא בנפרד.
+    doc = await repo.get(42)
+    assert doc["min_severity"] == "critical"
+    assert doc["conversation_state"] == "idle"
+    assert update_settings_called["n"] == 0
+
+
+@pytest.mark.asyncio
 async def test_final_callback_resets_initial_flag() -> None:
     from app.bot.handlers.callbacks import callback_router
 

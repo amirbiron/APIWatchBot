@@ -155,6 +155,13 @@ def format_date_range(start: datetime, end: datetime) -> str:
     if start.month == end.month and start.year == end.year:
         return f"{start.day}-{end.day} ב{months_he[end.month]} {end.year}"
     # cross-month: "24 במאי - 2 ביוני 2026"
+    # אם חצינו שנה (לדוגמה 28 בדצמבר → 4 בינואר), חשוב להציג את שתי
+    # השנים כדי שלא נוצר רושם של "פער של שנה" שגוי.
+    if start.year != end.year:
+        return (
+            f"{start.day} ב{months_he[start.month]} {start.year} - "
+            f"{end.day} ב{months_he[end.month]} {end.year}"
+        )
     return (
         f"{start.day} ב{months_he[start.month]} - "
         f"{end.day} ב{months_he[end.month]} {end.year}"

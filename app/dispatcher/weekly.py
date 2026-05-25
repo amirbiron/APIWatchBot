@@ -143,22 +143,25 @@ class WeeklyDispatcher:
         if not new_items:
             return
 
-        summary.users_with_content += 1
-
-        message = build_weekly_digest(new_items, date_range=date_range)
-        if message is None:
-            return
-
-        # claim פר update לפני send — אחרי הclaim, ה-items "שלנו" לסיכום הזה
-        claimed_ids: list[Any] = []
+        # claim **לפני** build — אחרת race עם UrgentDispatcher יכול להוסיף
+        # לdigest פריטים שהוא הספיק לשלוח כ-urgent בין fetch ל-claim. ה-message
+        # ייכלל אותם, יישלח, והם לא יסומנו ב-deliveries (פעמיים למשתמש).
+        # לכן: קודם claim — לוקחים בעלות, ואז בונים digest רק על מה שתפסנו.
+        claimed_items: list[dict[str, Any]] = []
         for item in new_items:
             if await self._delivery_repo.try_claim(
                 user["_id"], item["_id"], "weekly_digest"
             ):
-                claimed_ids.append(item["_id"])
+                claimed_items.append(item)
 
-        if not claimed_ids:
-            # race נדיר — בין fetch ל-claim מישהו הספיק לשלוח. דלג.
+        if not claimed_items:
+            # כל הפריטים נתפסו בינתיים ע"י תהליך אחר — דלג.
+            return
+
+        summary.users_with_content += 1
+
+        message = build_weekly_digest(claimed_items, date_range=date_range)
+        if message is None:
             return
 
         # שלח (ייתכן בכמה חלקים אם ארוך)

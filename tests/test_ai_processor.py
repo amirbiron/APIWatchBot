@@ -360,6 +360,60 @@ async def test_processor_survives_db_write_failure(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_processor_handles_corrupt_doc_without_throwing(monkeypatch) -> None:
+    """doc חסר _id לא יפיל את ה-batch. הוא מסומן failed ולא נקרא ל-AI."""
+    db = await _fresh_db()
+    # מכניסים פריט תקין + סימולציה של corrupt doc דרך החלפת ה-fetch.
+    await _seed_raw(db, "render")
+
+    ai = _FakeAIClient(
+        {
+            "render": {
+                "is_noise": False,
+                "summary_he": "x",
+                "severity": "info",
+                "is_urgent": False,
+                "categories": [],
+            }
+        }
+    )
+
+    from app.ai import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "notify_admin", _noop_notify)
+
+    processor = AIProcessor(db=db, ai_client=ai)
+
+    # נדמה שאחד ה-docs שמוחזרים מ-DB חסר _id (לדוגמה בעקבות data corruption)
+    cursor = db.updates.find({"status": "raw"}).sort("collected_at", 1).limit(50)
+    real_docs = await cursor.to_list(length=50)
+    corrupt_docs = real_docs + [{"api_id": "broken", "raw_title": "x"}]  # בלי _id
+
+    class _PatchedCursor:
+        def sort(self, *a, **kw): return self
+        def limit(self, *a, **kw): return self
+        async def to_list(self, *a, **kw): return corrupt_docs
+
+    class _PatchedUpdates:
+        def find(self, *a, **kw):
+            return _PatchedCursor()
+        def __getattr__(self, name):
+            return getattr(db.updates, name)
+
+    patched_db = type(
+        "DB", (), {"updates": _PatchedUpdates(), "system_state": db.system_state}
+    )()
+    processor._db = patched_db
+
+    summary = await processor.run_batch()
+    # 2 fetched, 1 processed (render), 1 failed (corrupt)
+    assert summary.fetched == 2
+    assert summary.failed == 1
+    # ה-AI נקרא רק פעם אחת (על ה-render הטוב, לא על ה-corrupt)
+    assert ai.calls == ["render"]
+
+
+@pytest.mark.asyncio
 async def test_processor_survives_db_query_failure(monkeypatch) -> None:
     """ה-query הראשוני נכשל (mongo down) — חוזר summary ריק, לא זורק.
     החוזה הזה קריטי כדי שAPScheduler לא יסמן את ה-job ככשל וירידות."""

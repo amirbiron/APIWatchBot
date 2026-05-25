@@ -198,6 +198,50 @@ async def test_weekly_records_delivery_per_update() -> None:
 
 
 @pytest.mark.asyncio
+async def test_weekly_digest_excludes_items_claimed_concurrently() -> None:
+    """אם UrgentDispatcher תופס את הפריט בין fetch ל-claim, ה-digest
+    חייב לא לכלול אותו (אחרת המשתמש רואה אותו פעמיים)."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    user_id = await _insert_user(
+        db, 1, subscribed=["render"], min_severity="important"
+    )
+    will_be_stolen = await _insert_processed_update(
+        db, "render", severity="critical"
+    )
+    remains_ours = await _insert_processed_update(
+        db, "render", severity="important"
+    )
+
+    # סימולציה: בין fetch של ה-weekly ל-claim, מישהו (urgent) כבר תפס
+    # את אחד הפריטים. נריץ את ה-weekly וננטר.
+    dispatcher = WeeklyDispatcher(db=db, sender=sender)
+
+    # patch try_claim: יחזיר False לפריט אחד, True לשני
+    original_try_claim = dispatcher._delivery_repo.try_claim
+
+    async def selective_claim(user, update, delivery_type):
+        if update == will_be_stolen:
+            return False
+        return await original_try_claim(user, update, delivery_type)
+
+    dispatcher._delivery_repo.try_claim = selective_claim
+
+    summary = await dispatcher.run()
+
+    assert summary.digests_sent == 1
+    # ה-message מכיל רק פריט אחד (זה שתפסנו), לא שניהם
+    msg = sender.sent[0][1]
+    assert msg.count("▪️") == 1
+    # רק 1 delivery נרשם (זה ש-claim הצליח)
+    delivered = await db.deliveries.count_documents(
+        {"user_id": user_id, "delivery_type": "weekly_digest"}
+    )
+    assert delivered == 1
+
+
+@pytest.mark.asyncio
 async def test_weekly_user_with_no_subscriptions_skipped() -> None:
     db = await _fresh_db()
     sender = _FakeSender()

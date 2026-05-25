@@ -176,17 +176,35 @@ class AIProcessor:
     async def _process_one(self, doc: dict[str, Any]) -> ItemResult:
         """מטפל ב-doc אחד מקצה לקצה. **אסור לזרוק** — תמיד מחזיר ItemResult.
 
-        כל קריאת DB עטופה ב-try/except: כשל ב-mongo לא יפיל את כל ה-batch
-        (asyncio.gather עם return_exceptions=False יפיץ את החריגה החוצה).
+        כל קוד שעלול לזרוק (קריאת doc fields, build_prompt, DB writes)
+        עטוף ב-try/except. אסור שcorrupt document יפיל את ה-batch.
         """
-        update_id = doc["_id"]
-        api_id = doc.get("api_id", "")
-        prompt = build_prompt(
-            api_name=api_id,
-            raw_title=doc.get("raw_title", ""),
-            raw_content=doc.get("raw_content", ""),
-            source_url=doc.get("source_url", ""),
-        )
+        # extraction של ה-_id חייב להיות פנימי כדי שגם KeyError לא יחמוק.
+        # אם _id חסר — אין מה לעשות עם הפריט הזה; מחזירים failed
+        # בלי DB write (אין לנו filter תקין למעבר אליו).
+        update_id = doc.get("_id")
+        if update_id is None:
+            logger.error("ai.process.missing_id", doc_keys=list(doc.keys()))
+            return ItemResult(update_id=None, status="failed", error="missing_id")
+
+        try:
+            api_id = doc.get("api_id", "")
+            prompt = build_prompt(
+                api_name=api_id,
+                raw_title=doc.get("raw_title", ""),
+                raw_content=doc.get("raw_content", ""),
+                source_url=doc.get("source_url", ""),
+            )
+        except Exception as e:  # noqa: BLE001 — corrupt document defense
+            logger.exception("ai.process.prompt_build_failed", update_id=str(update_id))
+            # מסמנים failed כדי שלא נקרא לAI שוב על אותו פריט שבור.
+            if not await self._safe_mark_failed(update_id, f"prompt_build: {e}"):
+                return _db_write_failed_result(update_id)
+            return ItemResult(
+                update_id=update_id,
+                status="failed",
+                error=f"prompt_build: {type(e).__name__}",
+            )
 
         try:
             response = await self._client.generate(prompt)

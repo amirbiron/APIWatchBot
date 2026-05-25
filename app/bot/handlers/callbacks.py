@@ -158,8 +158,14 @@ async def _handle_severity(query, repo, user_id: int, value: str) -> None:
             ),
         )
     else:
-        await repo.update_settings(user_id, min_severity=value)
-        await repo.set_conversation_state(user_id, "idle")
+        # שתי הפעולות באותו document update — אטומי. בלי זה,
+        # כשל בין השניים היה מותיר את המשתמש ב-conversation_state=
+        # selecting_severity עם min_severity חדש אבל בלי דרך לצאת.
+        await repo.set_conversation_state(
+            user_id,
+            "idle",
+            extra={"min_severity": value},
+        )
         await query.edit_message_text(
             f"✅ רמת החומרה עודכנה ל-<b>{value}</b>. /settings לסיכום.",
             parse_mode="HTML",

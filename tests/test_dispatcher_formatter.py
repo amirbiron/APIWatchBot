@@ -115,3 +115,14 @@ def test_format_date_range_cross_month() -> None:
     result = format_date_range(start, end)
     assert "24 במאי" in result
     assert "2 ביוני" in result
+
+
+def test_format_date_range_cross_year_includes_both_years() -> None:
+    """28 בדצמבר 2026 → 4 בינואר 2027 — חייב להראות את שתי השנים."""
+    start = datetime(2026, 12, 28, tzinfo=timezone.utc)
+    end = datetime(2027, 1, 4, tzinfo=timezone.utc)
+    result = format_date_range(start, end)
+    assert "2026" in result
+    assert "2027" in result
+    assert "28 בדצמבר" in result
+    assert "4 בינואר" in result
