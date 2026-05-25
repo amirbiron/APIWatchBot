@@ -103,32 +103,38 @@ async def test_weekly_handler(
     if diag.get("subscribed_count", 0) == 0:
         reason = "אין לך מנויים על אף API. שלח /apis כדי להירשם."
     elif diag.get("candidates", 0) == 0:
-        # שכבות עזר לאבחון איפה ה-pipeline נחתך:
-        total = diag.get("total_for_subscriptions", 0)
-        in_window = diag.get("in_window_any_status", 0)
-        raw_in_window = diag.get("raw_in_window", 0)
-        if total == 0:
+        # אם ה-counters נכשלו (או לא רצו) — לא ננחש; נציג "לא ידוע".
+        if diag.get("counters_failed") or "total_for_subscriptions" not in diag:
             sub_reason = (
-                "אין בכלל records ב-updates למנויים שלך — ה-collector "
-                "כנראה לא רץ עדיין (או שאין שינויים upstream)."
-            )
-        elif in_window == 0:
-            sub_reason = (
-                f"יש {total} records היסטוריים אבל אף אחד לא ב-7 ימים "
-                f"האחרונים — אין שינויים upstream לאחרונה."
-            )
-        elif raw_in_window > 0:
-            sub_reason = (
-                f"יש {raw_in_window} עדכונים ב-status=raw מהשבוע — "
-                f"ה-AI processor עדיין לא עיבד אותם (בדוק GEMINI_API_KEY "
-                f"ואת job 'process_ai_batch' ב-worker)."
+                "לא הצלחנו לאסוף counters נוספים לאבחון — בדוק לוגים "
+                "(weekly.diag.counters_failed)."
             )
         else:
-            sub_reason = (
-                f"יש {in_window} עדכונים מהשבוע אבל אף אחד עם "
-                f"status=processed וגם severity מתאימה — ייתכן שכולם "
-                f"skipped_noise/failed או שה-severity לא תואמת."
-            )
+            total = diag["total_for_subscriptions"]
+            in_window = diag["in_window_any_status"]
+            raw_in_window = diag["raw_in_window"]
+            if total == 0:
+                sub_reason = (
+                    "אין בכלל records ב-updates למנויים שלך — ה-collector "
+                    "כנראה לא רץ עדיין (או שאין שינויים upstream)."
+                )
+            elif in_window == 0:
+                sub_reason = (
+                    f"יש {total} records היסטוריים אבל אף אחד לא ב-7 ימים "
+                    f"האחרונים — אין שינויים upstream לאחרונה."
+                )
+            elif raw_in_window > 0:
+                sub_reason = (
+                    f"יש {raw_in_window} עדכונים ב-status=raw מהשבוע — "
+                    f"ה-AI processor עדיין לא עיבד אותם (בדוק GEMINI_API_KEY "
+                    f"ואת job 'process_ai_batch' ב-worker)."
+                )
+            else:
+                sub_reason = (
+                    f"יש {in_window} עדכונים מהשבוע אבל אף אחד עם "
+                    f"status=processed וגם severity מתאימה — ייתכן שכולם "
+                    f"skipped_noise/failed או שה-severity לא תואמת."
+                )
         reason = (
             f"חלון: 7 ימים אחורה מעכשיו (לא מההרשמה).\n"
             f"מנויים: {diag.get('subscribed_count')} | "
