@@ -17,7 +17,7 @@
   - [x] שלב 2c — Wave 3 (Meta Graph + WhatsApp+Green עם retries והתראות אדמין)
   - [ ] Anthropic (SPA — Playwright) — בעתיד, אופציונלי
 - [x] שלב 3 — AI Layer (Gemini 2.5 Flash עם structured output)
-- [ ] שלב 4 — פלואו רישום מלא
+- [x] שלב 4 — פלואו רישום אינטראקטיבי + כל פקודות הניהול
 - [ ] שלב 5 — Dispatcher (התראות + סיכום שבועי)
 
 ## מבנה הפרויקט

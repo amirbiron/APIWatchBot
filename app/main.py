@@ -58,6 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Telegram bot — גם אופציונלי בפיתוח.
         if settings.telegram_configured:
             bot_app = build_application()
+            # מזריקים UserRepository ל-bot_data כדי שה-handlers ייגשו ל-DB.
+            # אם אין mongo (פיתוח), ה-handlers יציגו "השירות מתאתחל".
+            if mongo_connected:
+                from app.bot.user_repository import UserRepository
+                from app.db.client import get_db
+
+                bot_app.bot_data["user_repository"] = UserRepository(get_db())
             await bot_app.initialize()
             bot_initialized = True
             await bot_app.start()
