@@ -74,3 +74,43 @@ def parse_iso_date(value: str | None) -> datetime | None:
             continue
     logger.debug("html_utils.date_parse_failed", value=s)
     return None
+
+
+def extract_header_sections(
+    parser: HTMLParser,
+    header_tags: set[str],
+) -> list[tuple[str, str]]:
+    """מחלץ סקציות "header + תוכן עד ה-header הבא" מ-DOM.
+
+    דפוס חוזר באתרי changelog: כותרת (h2/h3/h4) מסמנת תחילת פריט,
+    והתוכן הוא כל ה-siblings עד הכותרת הבאה (באותה רמה / קבוצת tags).
+
+    מחזיר רשימה של (title, content), מסונן מ-headers ריקות וסקציות
+    ללא תוכן. הסדר נשמר לפי סדר ה-DOM.
+    """
+    if not header_tags:
+        return []
+    selector = ", ".join(sorted(header_tags))
+    headers = [n for n in parser.css(selector) if n.tag in header_tags]
+
+    sections: list[tuple[str, str]] = []
+    for header in headers:
+        title = clean_text(header)
+        if not title:
+            continue
+
+        content_parts: list[str] = []
+        sibling = header.next
+        while sibling is not None and sibling.tag not in header_tags:
+            text = clean_text(sibling)
+            if text:
+                content_parts.append(text)
+            sibling = sibling.next
+
+        content = " ".join(content_parts).strip()
+        if not content:
+            continue
+
+        sections.append((title, content))
+
+    return sections

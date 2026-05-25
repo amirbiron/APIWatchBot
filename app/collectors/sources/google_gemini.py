@@ -1,20 +1,19 @@
 """מקור Google Gemini — HTML scraping.
 
-מבנה דומה ל-GBP (header + פסקאות), אבל סעיף 5.2 ב-Spec מדגיש:
+מבנה דומה ל-GBP אבל סעיף 5.2 ב-Spec מדגיש:
 "hash על רמת פריט בודד (לפי תאריך) ולא על הדף כולו, כי יש עדכונים
 תוך-יומיים." לכן אנחנו מעבירים `custom_hash_input` ל-RawItem עם
 ערך מבוסס תאריך הפריט — כך שהוספת שורה בתוך פריט קיים לא תייצר
 פריט חדש, אבל פריט חדש (תאריך חדש) כן יזוהה.
 
-אם תאריך לא נמצא בכותרת — נופלים ל-hash הדיפולטיבי (title+content),
-שעדיין נכון אבל יוצר רעש כשהתוכן משתנה בלי שינוי משמעותי.
+אם תאריך לא נמצא בכותרת — נופלים ל-hash הדיפולטיבי (title+content).
 """
 
 from __future__ import annotations
 
 from app.collectors.base import BaseSource, RawItem
 from app.collectors.sources._html_utils import (
-    clean_text,
+    extract_header_sections,
     fetch_html,
     parse_html,
     parse_iso_date,
@@ -36,25 +35,7 @@ class GoogleGeminiSource(BaseSource):
         parser = await parse_html(data)
 
         items: list[RawItem] = []
-        headers = [n for n in parser.css("h2, h3") if n.tag in _HEADER_TAGS]
-
-        for header in headers:
-            title = clean_text(header)
-            if not title:
-                continue
-
-            content_parts: list[str] = []
-            sibling = header.next
-            while sibling is not None and sibling.tag not in _HEADER_TAGS:
-                text = clean_text(sibling)
-                if text:
-                    content_parts.append(text)
-                sibling = sibling.next
-
-            content = " ".join(content_parts).strip()
-            if not content:
-                continue
-
+        for title, content in extract_header_sections(parser, _HEADER_TAGS):
             # ה-trick של Gemini: hash דטרמיניסטי לפי הכותרת (שמכילה תאריך).
             # מעדכן תוך-יומי לא יוצר כפילות; פריט עם תאריך חדש כן.
             # אם אין תאריך parsable — fallback לדיפולט (None יחזיר להתנהגות

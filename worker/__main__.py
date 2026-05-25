@@ -22,6 +22,12 @@ logger = get_logger(__name__)
 
 
 async def main() -> None:
+    """startup → loop → shutdown עם cleanup מובטח.
+
+    דפוס זהה ל-app/main.py:lifespan — כל רכישת משאב מסומנת ב-flag,
+    וה-finally מנקה רק את מה שבאמת נרכש. אם ensure_indexes או
+    scheduler.start נכשלים אחרי שmongo כבר התחבר, החיבור נסגר בכל זאת.
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -32,35 +38,54 @@ async def main() -> None:
     if not settings.mongodb_configured:
         raise RuntimeError("MONGODB_URI חסר — ה-worker לא יכול לרוץ בלי DB.")
 
-    db = await connect_to_mongo()
-    await ensure_indexes(db)
+    mongo_connected = False
+    try:
+        db = await connect_to_mongo()
+        mongo_connected = True
+        await ensure_indexes(db)
 
-    # http client אחד משותף בין כל המקורות — חוסך פתיחת connections.
-    async with httpx.AsyncClient(
-        headers={"User-Agent": "APIWatchBot/0.1 (+https://github.com/amirbiron/APIWatchBot)"},
-        follow_redirects=True,
-        timeout=30.0,
-    ) as http_client:
-        sources = build_sources(http_client)
-        runner = CollectorRunner(sources=sources, db=db)
-        scheduler = build_scheduler(runner, timezone=settings.timezone, run_at_startup=True)
+        # http client אחד משותף בין כל המקורות — חוסך פתיחת connections.
+        # ה-async with מבטיח סגירה בכל מקרה, גם בכשל פנימי.
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "APIWatchBot/0.1 (+https://github.com/amirbiron/APIWatchBot)"},
+            follow_redirects=True,
+            timeout=30.0,
+        ) as http_client:
+            scheduler = None
+            scheduler_started = False
+            try:
+                sources = build_sources(http_client)
+                runner = CollectorRunner(sources=sources, db=db)
+                scheduler = build_scheduler(
+                    runner, timezone=settings.timezone, run_at_startup=True
+                )
 
-        scheduler.start()
-        logger.info("worker.ready", source_count=len(sources))
+                scheduler.start()
+                scheduler_started = True
+                logger.info("worker.ready", source_count=len(sources))
 
-        # המתנה ל-SIGTERM/SIGINT
-        stop_event = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stop_event.set)
+                # המתנה ל-SIGTERM/SIGINT
+                stop_event = asyncio.Event()
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    loop.add_signal_handler(sig, stop_event.set)
 
-        await stop_event.wait()
-
-        logger.info("worker.shutdown.start")
-        # wait=False כי אם יש job רץ נחכה לו מעט אבל לא לנצח
-        scheduler.shutdown(wait=False)
-
-    await close_mongo_connection()
+                await stop_event.wait()
+                logger.info("worker.shutdown.start")
+            finally:
+                # scheduler נסגר *לפני* יציאה מ-async with httpx, כדי שjobs
+                # שעוד רצים לא ייפלו על http_client סגור.
+                if scheduler_started and scheduler is not None:
+                    try:
+                        scheduler.shutdown(wait=False)
+                    except Exception:
+                        logger.exception("worker.scheduler_shutdown_failed")
+    finally:
+        if mongo_connected:
+            try:
+                await close_mongo_connection()
+            except Exception:
+                logger.exception("worker.mongo_close_failed")
     logger.info("worker.shutdown.done")
 
 

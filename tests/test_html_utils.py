@@ -50,3 +50,51 @@ def test_parse_iso_date_returns_none_for_garbage() -> None:
 async def test_parse_html_returns_parser() -> None:
     parser = await parse_html(b"<html><body><h1>hi</h1></body></html>")
     assert parser.css_first("h1").text() == "hi"
+
+
+def test_extract_header_sections_basic() -> None:
+    from app.collectors.sources._html_utils import extract_header_sections
+
+    html = b"""
+    <html><body>
+    <h2>A</h2><p>a1</p><p>a2</p>
+    <h2>B</h2><p>b1</p>
+    <h2>C</h2><p>c1</p>
+    </body></html>
+    """
+    parser = HTMLParser(html)
+    sections = extract_header_sections(parser, {"h2"})
+
+    assert len(sections) == 3
+    assert sections[0] == ("A", "a1 a2")
+    assert sections[1] == ("B", "b1")
+    assert sections[2] == ("C", "c1")
+
+
+def test_extract_header_sections_stops_at_any_header_in_set() -> None:
+    """h2 ו-h3 שניהם פותחים סקציה — אוסף לא חוצה גבול ביניהם."""
+    from app.collectors.sources._html_utils import extract_header_sections
+
+    html = b"<html><body><h2>A</h2><p>a</p><h3>B</h3><p>b</p></body></html>"
+    parser = HTMLParser(html)
+    sections = extract_header_sections(parser, {"h2", "h3"})
+
+    assert sections == [("A", "a"), ("B", "b")]
+
+
+def test_extract_header_sections_skips_empty() -> None:
+    """header בלי תוכן אחריו — לא נכנס לתוצאה."""
+    from app.collectors.sources._html_utils import extract_header_sections
+
+    html = b"<html><body><h2>Empty</h2><h2>With content</h2><p>x</p></body></html>"
+    parser = HTMLParser(html)
+    sections = extract_header_sections(parser, {"h2"})
+
+    assert sections == [("With content", "x")]
+
+
+def test_extract_header_sections_empty_tags_set() -> None:
+    from app.collectors.sources._html_utils import extract_header_sections
+
+    parser = HTMLParser(b"<h2>X</h2>")
+    assert extract_header_sections(parser, set()) == []

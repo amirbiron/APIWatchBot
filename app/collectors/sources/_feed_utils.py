@@ -1,16 +1,16 @@
-"""כלי עזר משותפים לכל המקורות מבוססי RSS/Atom (feedparser)."""
+"""כלי עזר ומחלקת בסיס משותפים לכל המקורות מבוססי RSS/Atom (feedparser)."""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
 from time import struct_time
-from typing import Any
+from typing import Any, ClassVar
 
 import feedparser
 import httpx
 
-from app.collectors.base import RawItem
+from app.collectors.base import BaseSource, RawItem
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -78,3 +78,35 @@ def entry_to_raw_item(
         source_url=link,
         source_published_at=published,
     )
+
+
+class BaseFeedSource(BaseSource):
+    """מחלקת בסיס למקורות RSS/Atom.
+
+    תת-מחלקה צריכה להגדיר רק את ה-class vars (api_id, name_he, source_url),
+    ואופציונלית `url_filter` לסינון לפי URL של ה-entry (לדוגמה OpenAI
+    שמשתף RSS עם blog ו-changelog ורק changelog רלוונטי).
+
+    אין צורך לעקוף את `fetch()` — הדפוס זהה לכל ה-feeds.
+    """
+
+    # אם מוגדר, רק entries שה-link שלהם מכיל את הסטרינג ייכללו.
+    url_filter: ClassVar[str | None] = None
+
+    async def fetch(self) -> list[RawItem]:
+        data = await fetch_feed_bytes(self._http, self.source_url, self.timeout_seconds)
+        feed = await parse_feed(data)
+
+        items: list[RawItem] = []
+        for entry in feed.entries:
+            item = entry_to_raw_item(self.api_id, entry, url_filter=self.url_filter)
+            if item is not None:
+                items.append(item)
+
+        logger.debug(
+            "source.feed.fetched",
+            api_id=self.api_id,
+            count=len(items),
+            total=len(feed.entries),
+        )
+        return items

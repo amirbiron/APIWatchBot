@@ -17,16 +17,25 @@ def test_health_endpoint_returns_ok() -> None:
 
 
 def test_telegram_webhook_returns_503_when_bot_not_configured(monkeypatch) -> None:
-    """כשאין token, telegram_configured=False ו-bot_app=None — נקבל 503 דטרמיניסטית."""
+    """כשאין token, telegram_configured=False ו-bot_app=None — נקבל 503 דטרמיניסטית.
+
+    חייב לנקות את ה-cache של get_settings, אחרת monkeypatch.setenv לא
+    משפיע (Settings כבר נטענו ע"י lifespan של בדיקה קודמת)."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setenv("MONGODB_URI", "")
-    # ה-test client יבצע startup/shutdown לפי lifespan
-    with TestClient(app) as client:
-        response = client.post(
-            "/telegram/webhook/wrong-secret",
-            json={"update_id": 1},
-        )
-    assert response.status_code == 503
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/telegram/webhook/wrong-secret",
+                json={"update_id": 1},
+            )
+        assert response.status_code == 503
+    finally:
+        get_settings.cache_clear()
 
 
 def test_settings_paths_are_derived() -> None:
