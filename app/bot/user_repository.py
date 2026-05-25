@@ -118,21 +118,46 @@ class UserRepository:
     async def toggle_subscription(
         self, telegram_id: int, api_id: str
     ) -> dict[str, Any] | None:
-        """מוסיף/מסיר api_id מ-subscribed_apis. אטומי דרך $addToSet/$pull."""
-        user = await self.get(telegram_id)
-        if user is None:
-            return None
+        """מוסיף/מסיר api_id מ-subscribed_apis — אטומי לחלוטין.
 
-        currently_subscribed = api_id in user.get("subscribed_apis", [])
-        op = "$pull" if currently_subscribed else "$addToSet"
-        return await self._db.users.find_one_and_update(
-            {"telegram_id": telegram_id},
+        כלל 2 ב-CLAUDE.md אוסר על check-then-act. הדפוס הזה משתמש
+        בשתי קריאות `find_one_and_update` עם predicate על מצב הרשימה,
+        כך שכל פעולה היא atomic compare-and-swap:
+
+        1. נסה add עם תנאי "api_id לא ברשימה". אם נמצא — הוסף.
+        2. אחרת נסה remove עם תנאי "api_id כן ברשימה". אם נמצא — הסר.
+        3. אם שניהם לא נמצאו — המשתמש לא קיים.
+
+        תרחיש 2 קליקים מהירים מאותו משתמש:
+        - T1: add (succeeds, רשימה עכשיו מכילה).
+        - T2: add נכשל (predicate "not in" לא תואם), עובר ל-pull
+              והוא מצליח (predicate "in" תואם). רשימה עכשיו ריקה.
+        כלומר 2 קליקים = 2 הפיכות, כצפוי.
+        """
+        now = _utcnow()
+
+        # נסה ADD — predicate "api_id לא ברשימה כרגע"
+        added = await self._db.users.find_one_and_update(
+            {"telegram_id": telegram_id, "subscribed_apis": {"$ne": api_id}},
             {
-                op: {"subscribed_apis": api_id},
-                "$set": {"last_active_at": _utcnow()},
+                "$addToSet": {"subscribed_apis": api_id},
+                "$set": {"last_active_at": now},
             },
             return_document=ReturnDocument.AFTER,
         )
+        if added is not None:
+            return added
+
+        # ADD לא קרה כי api_id כבר ברשימה (או המשתמש לא קיים). נסה REMOVE.
+        removed = await self._db.users.find_one_and_update(
+            {"telegram_id": telegram_id, "subscribed_apis": api_id},
+            {
+                "$pull": {"subscribed_apis": api_id},
+                "$set": {"last_active_at": now},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return removed  # None אם המשתמש לא קיים בכלל
 
     async def set_paused(self, telegram_id: int, paused: bool) -> bool:
         """מחזיר True אם השינוי בוצע (משתמש קיים)."""

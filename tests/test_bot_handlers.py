@@ -271,7 +271,30 @@ async def test_api_done_with_zero_selected_blocks() -> None:
     # נשאר ב-selecting_apis, וanswered עם alert
     doc = await repo.get(42)
     assert doc["conversation_state"] == "selecting_apis"
-    assert any(a.get("show_alert") for a in cb.answers)
+
+    # ה-alert חייב להופיע כ-answer יחיד עם show_alert=True ועם הטקסט הנכון.
+    # בעבר היה bug ש-query.answer() נקרא 2 פעמים — הראשון בראוטר, השני
+    # ב-handler עם הטקסט. Telegram מתיר answer יחיד; הראשון "בלע" את ה-alert.
+    assert len(cb.answers) == 1
+    assert cb.answers[0]["show_alert"] is True
+    assert "בחר לפחות ספק אחד" in cb.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_callbacks_answer_exactly_once() -> None:
+    """כל handler חייב לקרוא query.answer() בדיוק פעם אחת.
+    קריאה כפולה זורקת BadRequest מ-Telegram."""
+    from app.bot.handlers.callbacks import callback_router
+
+    ctx, repo, _ = await _make_context_with_user()
+    await repo.get_or_create(telegram_id=42)
+
+    # toggle נקרא ענה פעם אחת
+    cb = _FakeCallbackQuery(data="api:t:openai", from_user=_FakeUser(id=42))
+    await callback_router(
+        _FakeUpdate(effective_user=None, callback_query=cb), ctx
+    )
+    assert len(cb.answers) == 1
 
 
 @pytest.mark.asyncio

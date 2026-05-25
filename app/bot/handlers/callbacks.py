@@ -31,16 +31,19 @@ logger = get_logger(__name__)
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """נקודת כניסה יחידה לכל לחיצות הכפתורים."""
+    """נקודת כניסה יחידה לכל לחיצות הכפתורים.
+
+    אנחנו **לא** קוראים ל-`query.answer()` כאן — Telegram מתיר answer
+    יחיד פר query, ויש handlers (לדוגמה _handle_api_done עם 0 בחירות)
+    שצריכים answer עם alert. כל handler אחראי להחזיר answer פעם אחת.
+    """
     query = update.callback_query
     if query is None or query.from_user is None:
         return
 
-    # answer מיד כדי שטלגרם יסיר את "טוען..." מהכפתור.
-    await query.answer()
-
     repo = repo_from_context(context)
     if repo is None:
+        await query.answer()
         await query.edit_message_text("⚠️ השירות עדיין מתאתחל.")
         return
 
@@ -68,6 +71,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_final(query, repo, user_id)
     else:
         logger.warning("bot.callback.unknown", data=data)
+        # answer בכל מקרה כדי שטלגרם יסיר את "טוען..." גם ל-callbacks
+        # לא מזוהים (שאסור שיקרו אבל מגנים).
+        await query.answer()
 
 
 # ----- handlers per prefix -----
@@ -76,10 +82,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def _handle_api_toggle(query, repo, user_id: int, api_id: str) -> None:
     if not is_valid_api_id(api_id):
         logger.warning("bot.callback.invalid_api", api_id=api_id)
+        await query.answer()
         return
 
     updated = await repo.toggle_subscription(user_id, api_id)
     if updated is None:
+        await query.answer()
         await query.edit_message_text("לא נמצאת במערכת. שלח /start כדי להירשם.")
         return
 
@@ -87,6 +95,7 @@ async def _handle_api_toggle(query, repo, user_id: int, api_id: str) -> None:
     await query.edit_message_reply_markup(
         reply_markup=build_apis_keyboard(updated.get("subscribed_apis", []))
     )
+    await query.answer()
 
 
 async def _handle_api_done(query, repo, user_id: int) -> None:
@@ -94,19 +103,19 @@ async def _handle_api_done(query, repo, user_id: int) -> None:
     אם זה /apis (re-pick), מסיים בלי לקדם."""
     doc = await repo.get(user_id)
     if doc is None:
+        await query.answer()
         await query.edit_message_text("לא נמצאת במערכת. שלח /start.")
         return
 
     selected = doc.get("subscribed_apis", []) or []
     if not selected:
+        # ה-answer הזה הוא היחיד ל-query הזה. בלי early answer בראוטר,
+        # ה-alert מוצג כצפוי.
         await query.answer(text="בחר לפחות ספק אחד", show_alert=True)
         return
 
     # ה-/apis flow מסתיים פה. הפלואו הראשי ממשיך ל-severity.
-    # נזהה לפי האם המשתמש כבר הוגדר במלואו (יש subscribed + יש severity).
-    # אם הוא בפלואו הראשי, severity שלו עוד דיפולטיבי ("important") אבל
-    # זה לא מבדיל. ניתן להבדיל לפי האם זו ההרשמה הראשונה — נשתמש ב-flag
-    # "in_initial_setup" שמסומן בכניסה לפלואו. אם לא קיים, זה /apis.
+    # נזהה לפי flag in_initial_setup שמסומן ב-/start.
     in_initial = doc.get("in_initial_setup", False)
     if in_initial:
         await repo.set_conversation_state(user_id, "selecting_severity")
@@ -120,14 +129,17 @@ async def _handle_api_done(query, repo, user_id: int) -> None:
         await query.edit_message_text(
             "✅ רשימת הספקים עודכנה. /settings לסיכום."
         )
+    await query.answer()
 
 
 async def _handle_severity(query, repo, user_id: int, value: str) -> None:
     if value not in {"critical", "important", "all"}:
+        await query.answer()
         return
 
     doc = await repo.get(user_id)
     if doc is None:
+        await query.answer()
         await query.edit_message_text("לא נמצאת במערכת.")
         return
 
@@ -152,14 +164,17 @@ async def _handle_severity(query, repo, user_id: int, value: str) -> None:
             f"✅ רמת החומרה עודכנה ל-<b>{value}</b>. /settings לסיכום.",
             parse_mode="HTML",
         )
+    await query.answer()
 
 
 async def _handle_frequency(query, repo, user_id: int, value: str) -> None:
     if value != "weekly":
+        await query.answer()
         return  # כרגע רק שבועי
 
     doc = await repo.get(user_id)
     if doc is None:
+        await query.answer()
         return
 
     await repo.set_conversation_state(
@@ -171,6 +186,7 @@ async def _handle_frequency(query, repo, user_id: int, value: str) -> None:
         parse_mode="HTML",
         reply_markup=build_urgent_keyboard(doc.get("receive_urgent_alerts")),
     )
+    await query.answer()
 
 
 async def _handle_urgent(query, repo, user_id: int, value: str) -> None:
@@ -179,6 +195,7 @@ async def _handle_urgent(query, repo, user_id: int, value: str) -> None:
         user_id, "confirming", extra={"receive_urgent_alerts": receive}
     )
     if updated is None:
+        await query.answer()
         return
 
     summary = format_user_summary(updated)
@@ -187,6 +204,7 @@ async def _handle_urgent(query, repo, user_id: int, value: str) -> None:
         parse_mode="HTML",
         reply_markup=build_final_confirm_keyboard(),
     )
+    await query.answer()
 
 
 async def _handle_final(query, repo, user_id: int) -> None:
@@ -195,6 +213,7 @@ async def _handle_final(query, repo, user_id: int) -> None:
         user_id, "idle", extra={"in_initial_setup": False}
     )
     if updated is None:
+        await query.answer()
         return
 
     await query.edit_message_text(
@@ -202,3 +221,4 @@ async def _handle_final(query, repo, user_id: int) -> None:
         "אם משהו דחוף יקרה לפני זה — נדע.\n\n"
         "שינוי הגדרות: /settings",
     )
+    await query.answer()
