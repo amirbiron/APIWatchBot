@@ -73,22 +73,27 @@ class CollectorRunner:
             results=list(results),
         )
 
-        # שמירת מטא ב-system_state — שימושי לאדמין ולבדיקה ידנית
-        await self._db.system_state.update_one(
-            {"key": "last_collect_run"},
-            {
-                "$set": {
-                    "value": {
-                        "started_at": started_at,
-                        "finished_at": finished_at,
-                        "total_inserted": summary.total_inserted,
-                        "failed_sources": summary.failed_sources,
-                    },
-                    "updated_at": finished_at,
-                }
-            },
-            upsert=True,
-        )
+        # שמירת מטא ב-system_state — שימושי לאדמין ולבדיקה ידנית.
+        # עטוף ב-try/except כדי לקיים את החוזה "לא זורק" — כשל ב-DB
+        # write הזה לא צריך לבטל את ה-summary שבו ה-collection כבר הצליח.
+        try:
+            await self._db.system_state.update_one(
+                {"key": "last_collect_run"},
+                {
+                    "$set": {
+                        "value": {
+                            "started_at": started_at,
+                            "finished_at": finished_at,
+                            "total_inserted": summary.total_inserted,
+                            "failed_sources": summary.failed_sources,
+                        },
+                        "updated_at": finished_at,
+                    }
+                },
+                upsert=True,
+            )
+        except Exception:
+            logger.exception("collector.run.state_write_failed")
 
         logger.info(
             "collector.run.done",
@@ -103,19 +108,14 @@ class CollectorRunner:
         start = datetime.now(timezone.utc)
         result = SourceResult(api_id=source.api_id)
 
+        fetch_succeeded = False
         try:
             items = await source.fetch()
             result.fetched = len(items)
             inserted, duplicates = await save_raw_items(self._db, items)
             result.inserted = inserted
             result.duplicates = duplicates
-
-            # רישום זמן הרצה מוצלח אחרון פר מקור
-            await self._db.system_state.update_one(
-                {"key": f"last_collect:{source.api_id}"},
-                {"$set": {"value": start, "updated_at": start}},
-                upsert=True,
-            )
+            fetch_succeeded = True
 
             logger.info(
                 "collector.source.success",
@@ -130,6 +130,21 @@ class CollectorRunner:
         except Exception as e:  # noqa: BLE001 — בכוונה רחב, אסור שמקור יפיל אחרים
             result.error = f"unexpected: {type(e).__name__}: {e}"
             logger.exception("collector.source.unexpected", api_id=source.api_id)
+
+        # רישום זמן הרצה מוצלח אחרון פר מקור — רק אם fetch+save הצליחו.
+        # ב-try נפרד כי כשל ב-state write לא צריך לסמן את המקור ככשל
+        # (ה-data כבר נשמר ב-updates).
+        if fetch_succeeded:
+            try:
+                await self._db.system_state.update_one(
+                    {"key": f"last_collect:{source.api_id}"},
+                    {"$set": {"value": start, "updated_at": start}},
+                    upsert=True,
+                )
+            except Exception:
+                logger.exception(
+                    "collector.source.state_write_failed", api_id=source.api_id
+                )
 
         finished = datetime.now(timezone.utc)
         result.duration_ms = int((finished - start).total_seconds() * 1000)

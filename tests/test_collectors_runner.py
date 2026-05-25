@@ -105,6 +105,27 @@ async def test_runner_updates_system_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_run_all_does_not_throw_on_state_write_failure() -> None:
+    """run_all חייב להחזיר RunSummary גם אם ה-system_state write נכשל.
+    APScheduler היה מסמן את ה-job כ-failed וגורם ל-retry/alert מיותרים."""
+    db = await _fresh_db()
+    source = _FakeSource([RawItem(api_id="fake", raw_title="t", raw_content="c", source_url="https://x")])
+    runner = CollectorRunner(sources=[source], db=db)
+
+    # מחליפים את system_state ב-collection שזורק על update_one
+    class _BrokenCollection:
+        async def update_one(self, *args, **kwargs):
+            raise RuntimeError("simulated mongo outage")
+
+    runner._db = type("DB", (), {"updates": db.updates, "system_state": _BrokenCollection()})()
+
+    # חייב להחזיר summary, לא לזרוק
+    summary = await runner.run_all()
+    assert summary.total_inserted == 1
+    assert "fake" not in summary.failed_sources  # ה-fetch הצליח, ה-state write לא רלוונטי
+
+
+@pytest.mark.asyncio
 async def test_runner_stores_all_required_fields() -> None:
     """וידוא שהדוקומנט שנכנס ל-DB תואם לסכמת Updates ב-Spec סעיף 4.2."""
     db = await _fresh_db()
