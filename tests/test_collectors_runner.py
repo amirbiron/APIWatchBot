@@ -145,3 +145,98 @@ async def test_runner_stores_all_required_fields() -> None:
     ]:
         assert field in doc, f"חסר שדה: {field}"
     assert doc["status"] == "raw"
+
+
+# ============================================================================
+# Failure counter + admin alert (Wave 3 infra)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_failure_counter_increments_on_error(monkeypatch) -> None:
+    """כל כשל מגדיל את failures:<source_key> אטומית."""
+    from app.collectors import runner as runner_module
+
+    # לוודא שלא נשלחת התראה בטעות בבדיקה הזו
+    monkeypatch.setattr(runner_module, "notify_admin", _capture_notify([]))
+
+    db = await _fresh_db()
+    bad = _FailingSource()
+    r = CollectorRunner(sources=[bad], db=db)
+
+    await r.run_all()
+    await r.run_all()
+
+    doc = await db.system_state.find_one({"key": "failures:broken"})
+    assert doc is not None
+    assert doc["value"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failure_counter_resets_on_success(monkeypatch) -> None:
+    """אחרי כמה כשלים, הצלחה מאפסת את הספירה ל-0."""
+    from app.collectors import runner as runner_module
+
+    notified: list[str] = []
+    monkeypatch.setattr(runner_module, "notify_admin", _capture_notify(notified))
+
+    db = await _fresh_db()
+
+    # 2 כשלים → counter=2 (טרם הגיע ל-3, ללא alert)
+    await CollectorRunner(sources=[_FailingSource()], db=db).run_all()
+    await CollectorRunner(sources=[_FailingSource()], db=db).run_all()
+
+    # מקור "broken" מצליח (אותו source_key, ה-RawItem עם api_id="broken")
+    success_source = _FakeSource(
+        [RawItem(api_id="broken", raw_title="t", raw_content="c", source_url="https://x")]
+    )
+    # מתחזים שזה אותו source_key — נשתמש בsubclass
+    class _SuccessAsBroken(_FakeSource):
+        api_id = "broken"
+        name_he = "Broken"
+        source_url = "https://broken.invalid/feed"
+
+    success_source = _SuccessAsBroken(
+        [RawItem(api_id="broken", raw_title="t", raw_content="c", source_url="https://x")]
+    )
+    await CollectorRunner(sources=[success_source], db=db).run_all()
+
+    doc = await db.system_state.find_one({"key": "failures:broken"})
+    assert doc is not None
+    assert doc["value"] == 0
+    # ולא נשלחה התראה (עוד לא הגענו ל-3 רצופים)
+    assert notified == []
+
+
+@pytest.mark.asyncio
+async def test_admin_alert_fires_exactly_at_three(monkeypatch) -> None:
+    """התראה לאדמין נשלחת בדיוק פעם אחת — בכשל ה-3 ברצף.
+
+    בכשלים 4-5 לא חוזר לשלוח (הימנעות מספאם).
+    """
+    from app.collectors import runner as runner_module
+
+    notified: list[str] = []
+    monkeypatch.setattr(runner_module, "notify_admin", _capture_notify(notified))
+
+    db = await _fresh_db()
+
+    # 5 כשלים רצופים
+    for _ in range(5):
+        await CollectorRunner(sources=[_FailingSource()], db=db).run_all()
+
+    # התראה נשלחה פעם אחת בדיוק — אחרי הכשל ה-3
+    assert len(notified) == 1
+    assert "Broken" in notified[0]
+
+    doc = await db.system_state.find_one({"key": "failures:broken"})
+    assert doc["value"] == 5
+
+
+def _capture_notify(target: list[str]):
+    """factory שמחזיר async function שתופסת הודעות במקום notify_admin אמיתי."""
+
+    async def _fake_notify(message: str) -> None:
+        target.append(message)
+
+    return _fake_notify

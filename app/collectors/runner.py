@@ -12,12 +12,18 @@ from datetime import datetime, timezone
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
 
 from app.collectors.base import BaseSource
 from app.collectors.storage import save_raw_items
 from app.logging_config import get_logger
+from app.utils.notify import notify_admin
 
 logger = get_logger(__name__)
+
+# סף שליחת התראה לאדמין על כשלים רצופים (Spec §5.2 ל-Meta).
+# מתפעל בדיוק על הערך הזה — לא ב-> כדי להמנע מספאם בכשלים 4+.
+_ALERT_AT_CONSECUTIVE_FAILURES = 3
 
 
 @dataclass
@@ -131,21 +137,67 @@ class CollectorRunner:
             result.error = f"unexpected: {type(e).__name__}: {e}"
             logger.exception("collector.source.unexpected", api_id=source.api_id)
 
-        # רישום זמן הרצה מוצלח אחרון פר מקור — רק אם fetch+save הצליחו.
+        # רישום מצב פר מקור — last_collect (בהצלחה) + failure counter (בשני המקרים).
         # ב-try נפרד כי כשל ב-state write לא צריך לסמן את המקור ככשל
         # (ה-data כבר נשמר ב-updates).
-        if fetch_succeeded:
-            try:
-                await self._db.system_state.update_one(
-                    {"key": f"last_collect:{source.api_id}"},
-                    {"$set": {"value": start, "updated_at": start}},
-                    upsert=True,
-                )
-            except Exception:
-                logger.exception(
-                    "collector.source.state_write_failed", api_id=source.api_id
-                )
+        try:
+            await self._update_source_state(source, fetch_succeeded, start)
+        except Exception:
+            logger.exception(
+                "collector.source.state_write_failed", api_id=source.api_id
+            )
 
         finished = datetime.now(timezone.utc)
         result.duration_ms = int((finished - start).total_seconds() * 1000)
         return result
+
+    async def _update_source_state(
+        self,
+        source: BaseSource,
+        success: bool,
+        run_started_at: datetime,
+    ) -> None:
+        """מעדכן state פר מקור: timestamp אחרון של הצלחה + counter כשלים רצופים.
+
+        ה-counter מתועד אטומית עם $inc / $set (כלל 2 ב-CLAUDE.md — אין
+        check-then-act). בכשל ה-3 ברצף שולחים התראה לאדמין; בכשלים
+        4-9 אין רעש; הצלחה מאפסת.
+        """
+        failures_key = f"failures:{source.source_key}"
+
+        if success:
+            # רישום הצלחה אחרונה
+            await self._db.system_state.update_one(
+                {"key": f"last_collect:{source.source_key}"},
+                {"$set": {"value": run_started_at, "updated_at": run_started_at}},
+                upsert=True,
+            )
+            # איפוס counter
+            await self._db.system_state.update_one(
+                {"key": failures_key},
+                {"$set": {"value": 0, "updated_at": run_started_at}},
+                upsert=True,
+            )
+            return
+
+        # כשל — מגדילים atomically ומחזירים את הערך החדש
+        updated = await self._db.system_state.find_one_and_update(
+            {"key": failures_key},
+            {"$inc": {"value": 1}, "$set": {"updated_at": run_started_at}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        consecutive = int(updated["value"]) if updated else 1
+        logger.warning(
+            "collector.source.failure_count",
+            api_id=source.api_id,
+            source_key=source.source_key,
+            consecutive=consecutive,
+        )
+
+        # התראה רק על הכשל ה-3 בדיוק — אחר כך שקט עד שמתאפס וחוזר ל-3.
+        if consecutive == _ALERT_AT_CONSECUTIVE_FAILURES:
+            await notify_admin(
+                f"⚠️ ה-collector של <b>{source.name_he}</b> "
+                f"({source.source_key}) נכשל {consecutive} פעמים ברצף."
+            )

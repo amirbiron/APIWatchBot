@@ -13,11 +13,13 @@ import pytest
 
 from app.collectors.sources.google_business import GoogleBusinessSource
 from app.collectors.sources.google_gemini import GoogleGeminiSource
+from app.collectors.sources.meta_graph import MetaGraphSource
 from app.collectors.sources.openai import OpenAISource
 from app.collectors.sources.render import RenderSource
 from app.collectors.sources.stripe import StripeSource
 from app.collectors.sources.telegram import TelegramSource
 from app.collectors.sources.twilio import TwilioSource
+from app.collectors.sources.whatsapp import WhatsAppGreenSource, WhatsAppMetaSource
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -191,3 +193,63 @@ async def test_html_source_handles_empty_page() -> None:
     async with httpx.AsyncClient(transport=transport) as client:
         items = await TelegramSource(client).fetch()
     assert items == []
+
+
+# ============================================================================
+# Wave 3 — Fragile HTML scraping (retries + admin alert)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_meta_graph_parses_html() -> None:
+    async with _mock_client_with_fixture("meta_graph_changelog.html") as client:
+        source = MetaGraphSource(client)
+        items = await source.fetch()
+
+    assert len(items) == 3
+    assert items[0].api_id == "meta_graph"
+    assert "v23.0" in items[0].raw_content
+    assert items[1].source_published_at is not None
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_meta_parses_html() -> None:
+    async with _mock_client_with_fixture("whatsapp_meta_changelog.html") as client:
+        source = WhatsAppMetaSource(client)
+        items = await source.fetch()
+
+    assert len(items) == 2
+    # api_id משותף עם Green API לצורך subscription matching
+    assert items[0].api_id == "whatsapp"
+    # source_key נפרד לצורך failure tracking
+    assert source.source_key == "whatsapp_meta"
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_green_parses_html() -> None:
+    async with _mock_client_with_fixture("whatsapp_green_changelog.html") as client:
+        source = WhatsAppGreenSource(client)
+        items = await source.fetch()
+
+    assert len(items) == 3
+    assert items[0].api_id == "whatsapp"
+    assert source.source_key == "whatsapp_green"
+    # api_id משותף עם Meta אבל hash שונה בזכות תוכן שונה
+    assert items[0].content_hash != ""
+
+
+def test_source_key_defaults_to_api_id() -> None:
+    """ל-source בלי source_id מוגדר — source_key=api_id (תאימות לאחור)."""
+    from app.collectors.sources.render import RenderSource
+
+    # יוצרים instance בלי client אמיתי — לא קוראים ל-fetch
+    source = RenderSource.__new__(RenderSource)
+    assert source.source_key == "render"
+
+
+def test_whatsapp_sources_share_api_id_but_distinct_keys() -> None:
+    """וידוא: api_id משותף לצורך subscription, source_key שונה לצורך state."""
+    meta = WhatsAppMetaSource.__new__(WhatsAppMetaSource)
+    green = WhatsAppGreenSource.__new__(WhatsAppGreenSource)
+    assert meta.api_id == green.api_id == "whatsapp"
+    assert meta.source_key != green.source_key

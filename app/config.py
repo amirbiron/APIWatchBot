@@ -71,6 +71,15 @@ class Settings(BaseSettings):
         )
 
     @property
+    def admin_notify_configured(self) -> bool:
+        """האם אפשר לשלוח התראות אדמין. דורש token + admin_id, אבל לא
+        webhook URL — worker שולח דרך Bot API ישירות, לא דרך ה-FastAPI."""
+        return (
+            bool(self.telegram_bot_token.get_secret_value())
+            and self.admin_telegram_id is not None
+        )
+
+    @property
     def mongodb_configured(self) -> bool:
         return bool(self.mongodb_uri)
 

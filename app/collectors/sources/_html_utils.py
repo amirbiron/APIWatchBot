@@ -7,6 +7,7 @@ selectolax (lexbor backend) מהיר מאוד ולא חוסם, אבל ה-wrapper
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timezone
 
@@ -21,11 +22,63 @@ logger = get_logger(__name__)
 _WHITESPACE_RE = re.compile(r"[\s ]+")
 
 
+# UA של Chrome אמיתי — לאתרי Meta (Spec §5.2 "User-Agent מסווה").
+# לא משקרים שהבוט הוא משתמש, אבל כן עוקפים סינון פשטני של "lib/" agents.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 async def fetch_html(http: httpx.AsyncClient, url: str, timeout: float) -> bytes:
     """משיכת HTML גולמי. raise_for_status כדי שכשלים יעלו ל-Runner שיטפל בלוג."""
     response = await http.get(url, timeout=timeout)
     response.raise_for_status()
     return response.content
+
+
+async def fetch_html_with_retries(
+    http: httpx.AsyncClient,
+    url: str,
+    timeout: float,
+    *,
+    max_attempts: int = 3,
+    use_browser_ua: bool = True,
+    backoff_base: float = 2.0,
+) -> bytes:
+    """גרסה עם exponential backoff למקורות שביריים (Meta, WhatsApp).
+
+    Spec §5.2: "retries + User-Agent מסווה" עבור Meta וWhatsApp.
+    backoff פנימי של 2 ו-4 שניות בין נסיונות; בכשל סופי מעלה את
+    החריגה המקורית כך ש-CollectorRunner._run_one יטפל בה כרגיל.
+
+    `backoff_base` בעיקר לבדיקות — אפשר להעביר 0 כדי להמנע מהמתנה.
+    """
+    headers = {"User-Agent": _BROWSER_UA} if use_browser_ua else None
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await http.get(url, timeout=timeout, headers=headers)
+            response.raise_for_status()
+            return response.content
+        except (httpx.HTTPError, httpx.TimeoutException) as e:
+            last_exc = e
+            if attempt < max_attempts:
+                wait_s = backoff_base**attempt
+                logger.warning(
+                    "fetch.retry",
+                    url=url,
+                    attempt=attempt,
+                    wait_s=wait_s,
+                    error=type(e).__name__,
+                )
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+
+    assert last_exc is not None
+    raise last_exc
 
 
 async def parse_html(data: bytes) -> HTMLParser:

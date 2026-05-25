@@ -98,3 +98,89 @@ def test_extract_header_sections_empty_tags_set() -> None:
 
     parser = HTMLParser(b"<h2>X</h2>")
     assert extract_header_sections(parser, set()) == []
+
+
+# ============================================================================
+# fetch_html_with_retries
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_retries_succeeds_after_failures() -> None:
+    """2 כשלים ראשונים → ניסיון שלישי מצליח → מחזיר תוכן."""
+    import httpx
+
+    from app.collectors.sources._html_utils import fetch_html_with_retries
+
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return httpx.Response(503, text="server busy")
+        return httpx.Response(200, content=b"<html>ok</html>")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        data = await fetch_html_with_retries(
+            client,
+            "https://example.invalid/x",
+            timeout=5,
+            backoff_base=0,  # בלי המתנה בטסט
+        )
+
+    assert data == b"<html>ok</html>"
+    assert attempts["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_retries_raises_after_max_attempts() -> None:
+    """3 כשלים רצופים → מעלה את החריגה המקורית."""
+    import httpx
+
+    from app.collectors.sources._html_utils import fetch_html_with_retries
+
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, text="boom")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await fetch_html_with_retries(
+                client,
+                "https://example.invalid/x",
+                timeout=5,
+                backoff_base=0,
+            )
+
+    assert attempts["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_with_retries_sends_browser_ua() -> None:
+    """ההגנה היחידה שיש לנו מול Meta — וידוא ש-UA אמיתי נשלח."""
+    import httpx
+
+    from app.collectors.sources._html_utils import fetch_html_with_retries
+
+    captured_uas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_uas.append(request.headers.get("User-Agent", ""))
+        return httpx.Response(200, content=b"<html></html>")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await fetch_html_with_retries(
+            client,
+            "https://example.invalid/x",
+            timeout=5,
+            use_browser_ua=True,
+            backoff_base=0,
+        )
+
+    assert "Chrome" in captured_uas[0]
+    assert "Mozilla" in captured_uas[0]

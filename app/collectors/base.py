@@ -65,10 +65,20 @@ class BaseSource(ABC):
     source_url: ClassVar[str]
     # timeout דיפולטיבי לבקשת HTTP. ניתן ל-override במקור.
     timeout_seconds: ClassVar[float] = 30.0
+    # מזהה פר-instance למצב פנימי (system_state keys). אופציונלי —
+    # ברירת מחדל ריק שמתורגם ל-api_id ב-source_key. נדרש כאשר 2+ classes
+    # חולקים api_id (לדוגמה: WhatsApp Meta + Green API) ועדיין צריכים
+    # failure counter נפרד.
+    source_id: ClassVar[str] = ""
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         # ה-client משותף בין כל המקורות (חוסך connections).
         self._http = http_client
+
+    @property
+    def source_key(self) -> str:
+        """מפתח ייחודי פר-instance ל-state. מתרגם source_id ריק ל-api_id."""
+        return self.source_id or self.api_id
 
     @abstractmethod
     async def fetch(self) -> list[RawItem]:
