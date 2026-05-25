@@ -145,6 +145,8 @@ async def test_processor_marks_failed_on_persistent_error(monkeypatch) -> None:
 
     doc = await db.updates.find_one({"_id": item_id})
     assert doc["status"] == "failed"
+    # הודעת השגיאה נשמרת ב-DB לאבחון בלי צורך לחצב לוגים
+    assert "nope" in doc.get("last_error", "")
 
     # התראת אדמין מקובצת — קוראים פעם אחת בכל ה-batch.
     assert len(notified) == 1
@@ -238,6 +240,57 @@ async def test_processor_writes_state(monkeypatch) -> None:
     assert state is not None
     assert state["value"]["processed"] == 1
     assert state["value"]["fetched"] == 1
+
+
+@pytest.mark.asyncio
+async def test_processor_survives_db_write_failure(monkeypatch) -> None:
+    """כשל ב-DB write פר item לא יפיל את ה-batch (no-throw contract)."""
+    db = await _fresh_db()
+    await _seed_raw(db, "render")
+    await _seed_raw(db, "render", title="second")
+
+    ai = _FakeAIClient(
+        {
+            "render": {
+                "is_noise": False,
+                "summary_he": "x",
+                "severity": "info",
+                "is_urgent": False,
+                "categories": [],
+            }
+        }
+    )
+
+    # מעטפים את db.updates עם wrapper ש-update_one זורק תמיד
+    class _BrokenUpdates:
+        def __init__(self, real):
+            self._real = real
+
+        def find(self, *args, **kwargs):
+            return self._real.find(*args, **kwargs)
+
+        async def update_one(self, *args, **kwargs):
+            raise RuntimeError("simulated mongo outage")
+
+    broken_db = type(
+        "DB",
+        (),
+        {
+            "updates": _BrokenUpdates(db.updates),
+            "system_state": db.system_state,
+        },
+    )()
+
+    from app.ai import processor as proc_mod
+
+    notified: list[str] = []
+    monkeypatch.setattr(proc_mod, "notify_admin", _capture(notified))
+
+    # ה-batch לא זורק למרות שכל ה-update_one זורקים
+    summary = await AIProcessor(db=broken_db, ai_client=ai).run_batch()
+    assert summary.fetched == 2
+    # האיכוסים מסומנים כ-failed כי ה-DB write נכשל
+    assert summary.failed == 2
 
 
 @pytest.mark.asyncio

@@ -118,7 +118,11 @@ class AIProcessor:
             return await self._process_one(doc)
 
     async def _process_one(self, doc: dict[str, Any]) -> ItemResult:
-        """מטפל ב-doc אחד מקצה לקצה. אסור לזרוק — תמיד מחזיר ItemResult."""
+        """מטפל ב-doc אחד מקצה לקצה. **אסור לזרוק** — תמיד מחזיר ItemResult.
+
+        כל קריאת DB עטופה ב-try/except: כשל ב-mongo לא יפיל את כל ה-batch
+        (asyncio.gather עם return_exceptions=False יפיץ את החריגה החוצה).
+        """
         update_id = doc["_id"]
         api_id = doc.get("api_id", "")
         prompt = build_prompt(
@@ -131,60 +135,92 @@ class AIProcessor:
         try:
             response = await self._client.generate(prompt)
         except GeminiAPIError as e:
-            await self._mark_failed(update_id, str(e))
+            await self._safe_mark_failed(update_id, str(e))
             return ItemResult(update_id=update_id, status="failed", error=str(e))
         except Exception as e:  # noqa: BLE001 — שמירה על no-throw
             logger.exception("ai.process.unexpected", update_id=str(update_id))
-            await self._mark_failed(update_id, f"unexpected: {type(e).__name__}")
-            return ItemResult(
-                update_id=update_id, status="failed", error=str(e)
-            )
+            error_msg = f"unexpected: {type(e).__name__}: {e}"
+            await self._safe_mark_failed(update_id, error_msg)
+            return ItemResult(update_id=update_id, status="failed", error=error_msg)
 
         # is_noise=true → skipped_noise
         if response.get("is_noise"):
-            await self._mark_skipped_noise(update_id)
+            await self._safe_mark_skipped_noise(update_id)
             return ItemResult(update_id=update_id, status="skipped_noise")
 
         # תוצאה תקינה
-        await self._mark_processed(update_id, response)
+        ok = await self._safe_mark_processed(update_id, response)
+        if not ok:
+            # DB write נכשל אבל ה-AI הצליח. מסמנים את התוצאה כ-failed כדי שיתעבד שוב
+            # בריצה הבאה (status נשאר "raw" כי ה-update_one נכשל).
+            return ItemResult(
+                update_id=update_id,
+                status="failed",
+                error="db_write_failed_after_ai_success",
+            )
         return ItemResult(update_id=update_id, status="processed")
 
-    async def _mark_processed(self, update_id: Any, response: dict[str, Any]) -> None:
-        await self._db.updates.update_one(
-            {"_id": update_id},
-            {
-                "$set": {
-                    "summary_he": response.get("summary_he", ""),
-                    "severity": response.get("severity"),
-                    "is_urgent": bool(response.get("is_urgent", False)),
-                    "categories": list(response.get("categories", [])),
-                    "status": "processed",
-                    "processed_at": datetime.now(timezone.utc),
-                }
-            },
-        )
+    async def _safe_mark_processed(
+        self, update_id: Any, response: dict[str, Any]
+    ) -> bool:
+        try:
+            await self._db.updates.update_one(
+                {"_id": update_id},
+                {
+                    "$set": {
+                        "summary_he": response.get("summary_he", ""),
+                        "severity": response.get("severity"),
+                        "is_urgent": bool(response.get("is_urgent", False)),
+                        "categories": list(response.get("categories", [])),
+                        "status": "processed",
+                        "processed_at": datetime.now(timezone.utc),
+                    }
+                },
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "ai.mark_processed.db_failed", update_id=str(update_id)
+            )
+            return False
 
-    async def _mark_skipped_noise(self, update_id: Any) -> None:
-        await self._db.updates.update_one(
-            {"_id": update_id},
-            {
-                "$set": {
-                    "status": "skipped_noise",
-                    "processed_at": datetime.now(timezone.utc),
-                }
-            },
-        )
+    async def _safe_mark_skipped_noise(self, update_id: Any) -> None:
+        try:
+            await self._db.updates.update_one(
+                {"_id": update_id},
+                {
+                    "$set": {
+                        "status": "skipped_noise",
+                        "processed_at": datetime.now(timezone.utc),
+                    }
+                },
+            )
+        except Exception:
+            logger.exception(
+                "ai.mark_skipped.db_failed", update_id=str(update_id)
+            )
 
-    async def _mark_failed(self, update_id: Any, error: str) -> None:
-        await self._db.updates.update_one(
-            {"_id": update_id},
-            {
-                "$set": {
-                    "status": "failed",
-                    "processed_at": datetime.now(timezone.utc),
-                }
-            },
-        )
+    async def _safe_mark_failed(self, update_id: Any, error: str) -> None:
+        """שומר את הודעת השגיאה ב-`last_error` כדי שאפשר יהיה לאבחן
+        כשל מ-DB בלי לחצב לוגים. ה-string מקוצר ל-500 תווים — מספיק
+        לסיווג, מונע נפיחות בdocs בקצה."""
+        try:
+            await self._db.updates.update_one(
+                {"_id": update_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "processed_at": datetime.now(timezone.utc),
+                        "last_error": error[:500],
+                    }
+                },
+            )
+        except Exception:
+            logger.exception(
+                "ai.mark_failed.db_failed",
+                update_id=str(update_id),
+                original_error=error[:200],
+            )
 
     async def _write_state(self, summary: BatchSummary) -> None:
         try:

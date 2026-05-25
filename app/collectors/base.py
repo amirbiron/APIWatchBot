@@ -47,10 +47,6 @@ class RawItem:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-class FetchError(Exception):
-    """כשל באיסוף ממקור — נתפס ב-Runner כדי שלא יפיל מקורות אחרים."""
-
-
 class BaseSource(ABC):
     """כל מקור איסוף יורש ממחלקה הזו.
 
@@ -84,6 +80,8 @@ class BaseSource(ABC):
     async def fetch(self) -> list[RawItem]:
         """מחזיר רשימת פריטים גולמיים מהמקור. חייב להיות אסינכרוני.
 
-        אסור לזרוק חריגים — להעדיף לוג + רשימה ריקה.
-        אם בכל זאת קורה כשל לא-צפוי, ה-Runner יתפוס FetchError.
+        מותר לזרוק httpx.HTTPError לכשלי רשת/HTTP — CollectorRunner._run_one
+        תופס אותו ומתעד את המקור ככשל בלי להפיל אחרים. גם חריגות אחרות
+        נתפסות שם כ-`unexpected:` (ה-`except Exception` הרחב), אבל עדיף
+        לטפל בהן במקום אם הן צפויות.
         """
