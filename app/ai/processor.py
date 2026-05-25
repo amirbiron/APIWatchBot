@@ -106,12 +106,16 @@ class AIProcessor:
         results: list[ItemResult] = []
         for doc, raw in zip(docs, raw_results):
             if isinstance(raw, BaseException):
-                # _process_one לא אמור לזרוק (יש בו try/except), אבל
-                # אם בכל זאת זרק — מסמנים failed בלי להפיל את ה-batch.
-                logger.exception(
+                # _process_one לא אמור לזרוק (יש בו try/except), אבל אם
+                # בכל זאת זרק — מסמנים failed בלי להפיל את ה-batch.
+                # logger.exception מסתמך על sys.exc_info() שריק כאן (אנחנו
+                # לא ב-except block — ה-exception נתפס ע"י gather והוחזר
+                # כערך). מעבירים את ה-traceback ידנית.
+                logger.error(
                     "ai.run.process_one_raised",
                     update_id=str(doc.get("_id")),
                     error_type=type(raw).__name__,
+                    exc_info=(type(raw), raw, raw.__traceback__),
                 )
                 results.append(
                     ItemResult(
