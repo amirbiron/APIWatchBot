@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Render Changelog</title>
+  <link>https://render.com/changelog</link>
+  <description>Latest updates from Render</description>
+  <item>
+    <title>Improved deploy performance</title>
+    <link>https://render.com/changelog/improved-deploy-performance</link>
+    <description>Deploy times for Web Services are now 30% faster on average.</description>
+    <pubDate>Mon, 20 May 2026 10:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>New region: Sydney</title>
+    <link>https://render.com/changelog/new-region-sydney</link>
+    <description>You can now deploy services in our new Sydney region.</description>
+    <pubDate>Wed, 15 May 2026 14:30:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>
