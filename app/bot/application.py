@@ -23,6 +23,7 @@ from app.bot.handlers.settings import settings_handler
 from app.bot.handlers.severity import severity_handler
 from app.bot.handlers.start import start_handler
 from app.bot.handlers.stop import stop_handler
+from app.bot.handlers.test_weekly import test_weekly_handler
 from app.config import get_settings
 from app.logging_config import get_logger
 
@@ -54,13 +55,15 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("pause", pause_handler))
     application.add_handler(CommandHandler("resume", resume_handler))
     application.add_handler(CommandHandler("stop", stop_handler))
+    # פקודת אדמין — הפעלה ידנית של הסיכום השבועי (בודק הרשאה בעצמו).
+    application.add_handler(CommandHandler("test_weekly", test_weekly_handler))
 
     # נתב יחיד לכל לחיצות הכפתורים — מפענח callback_data לפי prefix
     application.add_handler(CallbackQueryHandler(callback_router))
 
     logger.info(
         "bot.application.built",
-        command_handlers=9,
+        command_handlers=10,
         callback_handlers=1,
     )
     return application
