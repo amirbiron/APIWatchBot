@@ -128,6 +128,35 @@ async def test_sender_rate_limit_throttles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sender_rate_limit_doesnt_serialize_http_calls() -> None:
+    """5 sends מקבילים — כל אחד תופס slot מהר, ה-sleep מקבילי.
+    זמן ריצה כולל קרוב ל-(N-1) * interval (לא N * (interval + http_latency))."""
+    import asyncio
+
+    request_started_at: list[float] = []
+
+    async def slow_handler(request: httpx.Request) -> httpx.Response:
+        request_started_at.append(time.monotonic())
+        # מדמים HTTP איטי — אם ה-lock נשמר ב-sleep, הקריאות יסתרסרו ויארכו N*X
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"ok": True})
+
+    sender = TelegramSender(bot_token="fake")
+    sender._client = httpx.AsyncClient(transport=httpx.MockTransport(slow_handler))
+    try:
+        start = time.monotonic()
+        await asyncio.gather(*(sender.send(chat_id=i, text="x") for i in range(5)))
+        elapsed = time.monotonic() - start
+    finally:
+        await sender.close()
+
+    # מינימום תיאורטי: 4 הפרשי interval (~40ms * 4 = 160ms) + http overhead.
+    # מקסימום ללא תיקון (serialize): 5 * (40ms + 50ms) = 450ms.
+    # ערך סביר עם הfix: ~200-260ms. נבחר 350ms כסף בטוח.
+    assert elapsed < 0.35, f"sends serialized — {elapsed:.3f}s elapsed"
+
+
+@pytest.mark.asyncio
 async def test_sender_network_error_returns_error_status() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated down")

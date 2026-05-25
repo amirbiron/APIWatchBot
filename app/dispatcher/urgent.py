@@ -24,6 +24,15 @@ logger = get_logger(__name__)
 # חלון הזמן ל-updates דחופים (Spec §8.1).
 _LOOKBACK_HOURS = 24
 
+# מיפוי הפוך ל-SEVERITY_SETS של weekly: לכל update.severity, אילו ערכי
+# min_severity של משתמש מקבלים אותו. "critical" של הupdate מתקבל בכל
+# user (כי "critical" נכלל בכל אחת מהקבוצות); "info" רק ע"י "all".
+_USER_MIN_SEVERITIES_FOR_UPDATE: dict[str, list[str]] = {
+    "critical": ["critical", "important", "all"],
+    "important": ["important", "all"],
+    "info": ["all"],
+}
+
 
 @dataclass
 class UrgentRunSummary:
@@ -94,7 +103,10 @@ class UrgentDispatcher:
         summary: UrgentRunSummary,
     ) -> None:
         try:
-            users = await self._fetch_eligible_users(update["api_id"])
+            users = await self._fetch_eligible_users(
+                api_id=update["api_id"],
+                update_severity=update.get("severity"),
+            )
         except Exception:
             logger.exception(
                 "urgent.users_fetch_failed", update_id=str(update.get("_id"))
@@ -114,12 +126,26 @@ class UrgentDispatcher:
                 )
                 summary.send_failures += 1
 
-    async def _fetch_eligible_users(self, api_id: str) -> list[dict[str, Any]]:
+    async def _fetch_eligible_users(
+        self,
+        *,
+        api_id: str,
+        update_severity: str | None,
+    ) -> list[dict[str, Any]]:
+        """מסנן גם לפי min_severity של המשתמש. דוגמה: משתמש שבחר 'critical
+        בלבד' לא יקבל התראת urgent על severity='important' למרות שהיא
+        מסומנת is_urgent=True. ברירת מחדל לפריט בלי severity: 'critical'
+        (הכי מחמיר; כל user יקבל) — תרחיש לא צפוי כי AI Layer ממלא severity."""
+        allowed_min_severities = _USER_MIN_SEVERITIES_FOR_UPDATE.get(
+            update_severity or "critical",
+            ["critical", "important", "all"],
+        )
         cursor = self._db.users.find(
             {
                 "subscribed_apis": api_id,
                 "paused": False,
                 "receive_urgent_alerts": True,
+                "min_severity": {"$in": allowed_min_severities},
             }
         )
         return await cursor.to_list(length=None)

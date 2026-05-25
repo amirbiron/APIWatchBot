@@ -75,14 +75,24 @@ class TelegramSender:
         return result
 
     async def _rate_limit_wait(self) -> None:
-        """לפני כל send — מוודאים שלא חורגים מקצב גלובלי של 25/sec."""
+        """לפני כל send — מוודאים שלא חורגים מקצב גלובלי של 25/sec.
+
+        תפיסה אטומית מתחת ל-lock, ה-sleep מחוץ ל-lock. בלי זה, N שולחים
+        מקבילים היו מסתרסרים: כל אחד היה מחכה לסיום ה-sleep של הקודם
+        לפני שהיה יכול בכלל לרשום את הזמן שלו. במצב הזה, כל קוראים מקבל
+        slot ממוספר במהירות ואז ישנים במקביל.
+        """
         async with self._lock:
             now = time.monotonic()
-            delta = now - self._last_send_at
-            if delta < _MIN_INTERVAL_SECONDS:
-                wait = _MIN_INTERVAL_SECONDS - delta
-                await asyncio.sleep(wait)
-            self._last_send_at = time.monotonic()
+            # ה-slot הבא = המאוחר מבין "עכשיו" ל-"slot אחרון + interval".
+            # מקבעים אותו ב-_last_send_at כדי שהקורא הבא יתחיל מ-(slot+interval).
+            next_slot = max(now, self._last_send_at + _MIN_INTERVAL_SECONDS)
+            self._last_send_at = next_slot
+
+        # ה-sleep מחוץ ל-lock — שולחים במקביל יכולים לישון בו-זמנית.
+        wait = next_slot - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     async def _send_once(self, chat_id: int, text: str) -> SendResult:
         """ניסיון יחיד. ממפה שגיאות ידועות ל-SendResult.status."""

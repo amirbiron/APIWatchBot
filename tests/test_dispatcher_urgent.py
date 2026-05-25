@@ -146,6 +146,74 @@ async def test_urgent_one_failed_send_doesnt_block_others() -> None:
 
 
 @pytest.mark.asyncio
+async def test_urgent_respects_user_min_severity() -> None:
+    """משתמש שבחר 'critical בלבד' לא יקבל urgent על severity='important'."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    # 2 משתמשים: אחד דורש רק critical, השני מקבל important+
+    await _insert_user(db, 1, subscribed=["render"])  # default min_severity=important
+    await db.users.update_one(
+        {"telegram_id": 1}, {"$set": {"min_severity": "critical"}}
+    )
+    await _insert_user(db, 2, subscribed=["render"])  # important
+
+    # update urgent עם severity=important — לא critical
+    await db.updates.insert_one(
+        {
+            "api_id": "render",
+            "raw_title": "t",
+            "raw_content": "c",
+            "source_url": "https://x",
+            "content_hash": "h-important",
+            "summary_he": "סיכום",
+            "severity": "important",
+            "is_urgent": True,
+            "categories": ["new_feature"],
+            "status": "processed",
+            "processed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    summary = await UrgentDispatcher(db=db, sender=sender).run()
+
+    # רק משתמש 2 (important+) מקבל; משתמש 1 (critical only) לא
+    assert summary.messages_sent == 1
+    assert sender.sent[0][0] == 2
+
+
+@pytest.mark.asyncio
+async def test_urgent_min_severity_all_receives_info_urgent() -> None:
+    """משתמש עם 'all' מקבל גם urgent של severity='info' (נדיר אבל אפשרי)."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"])
+    await db.users.update_one(
+        {"telegram_id": 1}, {"$set": {"min_severity": "all"}}
+    )
+
+    await db.updates.insert_one(
+        {
+            "api_id": "render",
+            "raw_title": "t",
+            "raw_content": "c",
+            "source_url": "https://x",
+            "content_hash": "h-info-urgent",
+            "summary_he": "סיכום",
+            "severity": "info",
+            "is_urgent": True,
+            "categories": ["bugfix"],
+            "status": "processed",
+            "processed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    summary = await UrgentDispatcher(db=db, sender=sender).run()
+    assert summary.messages_sent == 1
+
+
+@pytest.mark.asyncio
 async def test_urgent_ignores_old_updates() -> None:
     db = await _fresh_db()
     sender = _FakeSender()
