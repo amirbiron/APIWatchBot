@@ -12,7 +12,9 @@ def _utcnow() -> datetime:
     """tz-aware UTC — תואם ל-mongo client עם tz_aware=True."""
     return datetime.now(timezone.utc)
 
-Severity = Literal["critical", "important", "info"]
+# הסיווג שה-AI נותן לפריט עצמו.
+# שונה מ-`MinSeverity` שב-user.py — כאן זה ערך, שם זה סף סינון.
+UpdateSeverity = Literal["critical", "important", "info"]
 UpdateStatus = Literal["raw", "processed", "failed", "skipped_noise"]
 Category = Literal[
     "deprecation",
@@ -41,7 +43,7 @@ class Update(BaseModel):
 
     # תוצרי עיבוד AI — ממולאים בשלב 3
     summary_he: str | None = None
-    severity: Severity | None = None
+    severity: UpdateSeverity | None = None
     is_urgent: bool = False
     categories: list[Category] = Field(default_factory=list)
 

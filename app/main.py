@@ -148,17 +148,16 @@ async def telegram_webhook(secret: str, request: Request) -> Response:
         raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE)
 
     # שתי בדיקות — secret ב-path + header. שתיהן ב-compare_digest כדי להימנע
-    # מ-timing side channel שיאפשר ניחוש הדרגתי.
+    # מ-timing side channel שיאפשר ניחוש הדרגתי. שתיהן רצות תמיד (לא
+    # קצרצרת) כדי שהזמן יישאר קבוע.
     path_ok = hmac.compare_digest(secret, expected_secret)
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     header_ok = hmac.compare_digest(header_secret, expected_secret)
     if not (path_ok and header_ok):
-        logger.warning(
-            "telegram.webhook.unauthorized",
-            reason="bad secret",
-            path_ok=path_ok,
-            header_ok=header_ok,
-        )
+        # לא רושמים מי משתי הבדיקות נכשלה — מידע פר-בדיקה היה מאפשר
+        # לתוקף שגונב logs לדעת לאיזה ערוץ הוא צריך לכוון את התקיפה
+        # (path vs header), ומחליש את ההגנה הדו-שכבתית.
+        logger.warning("telegram.webhook.unauthorized")
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN)
 
     try:

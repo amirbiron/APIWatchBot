@@ -14,8 +14,11 @@ def _utcnow() -> datetime:
     ('updated_at > X') לא יזרקו TypeError."""
     return datetime.now(timezone.utc)
 
-# רמת חומרה מינימלית שמשתמש מוכן לקבל
-Severity = Literal["critical", "important", "all"]
+# רמת חומרה מינימלית שהמשתמש מוכן לקבל.
+# שונה מ-`UpdateSeverity` במכוון: כאן זה *סף סינון* ("all" = בלי סף),
+# שם זה הסיווג של הפריט עצמו. מי שמשווה ביניהם בdispatcher
+# צריך לתרגם: "all" → לקבל כל ערך של UpdateSeverity.
+MinSeverity = Literal["critical", "important", "all"]
 Frequency = Literal["weekly"]  # בעתיד: "daily"
 ConversationState = Literal[
     "idle",
@@ -36,7 +39,7 @@ class User(BaseModel):
 
     # העדפות
     subscribed_apis: list[str] = Field(default_factory=list)
-    min_severity: Severity = "important"
+    min_severity: MinSeverity = "important"
     frequency: Frequency = "weekly"
     receive_urgent_alerts: bool = True
 
