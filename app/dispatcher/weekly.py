@@ -200,6 +200,36 @@ class WeeklyDispatcher:
         candidates = await cursor.to_list(length=None)
         if diagnostics is not None:
             diagnostics["candidates"] = len(candidates)
+            # אם candidates==0 — נספק שכבות עזר כדי לאבחן איפה ה-pipeline
+            # נחתך: total בכלל למנויים האלו, בחלון 7 ימים בכל status,
+            # ו-raw (טרם עיבוד AI) בחלון. עוזר להבדיל בין "ה-collector
+            # לא רץ" ל-"רץ אך AI processor לא רץ" ל-"אין שינויים upstream".
+            if not candidates:
+                try:
+                    diagnostics["total_for_subscriptions"] = (
+                        await self._db.updates.count_documents(
+                            {"api_id": {"$in": subscribed}}
+                        )
+                    )
+                    diagnostics["in_window_any_status"] = (
+                        await self._db.updates.count_documents(
+                            {
+                                "api_id": {"$in": subscribed},
+                                "collected_at": {"$gte": cutoff},
+                            }
+                        )
+                    )
+                    diagnostics["raw_in_window"] = (
+                        await self._db.updates.count_documents(
+                            {
+                                "api_id": {"$in": subscribed},
+                                "status": "raw",
+                                "collected_at": {"$gte": cutoff},
+                            }
+                        )
+                    )
+                except Exception:
+                    logger.exception("weekly.diag.counters_failed")
         if not candidates:
             return
 
