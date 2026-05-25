@@ -17,6 +17,9 @@ from app.collectors.runner import CollectorRunner
 from app.config import get_settings
 from app.db.client import close_mongo_connection, connect_to_mongo
 from app.db.indexes import ensure_indexes
+from app.dispatcher.sender import TelegramSender
+from app.dispatcher.urgent import UrgentDispatcher
+from app.dispatcher.weekly import WeeklyDispatcher
 from app.logging_config import configure_logging, get_logger
 from worker.scheduler import build_scheduler
 
@@ -55,6 +58,7 @@ async def main() -> None:
         ) as http_client:
             scheduler = None
             scheduler_started = False
+            telegram_sender: TelegramSender | None = None
             try:
                 sources = build_sources(http_client)
                 runner = CollectorRunner(sources=sources, db=db)
@@ -75,11 +79,29 @@ async def main() -> None:
                         reason="GEMINI_API_KEY חסר",
                     )
 
+                # Dispatchers — דורשים TELEGRAM_BOT_TOKEN בלבד (לא webhook_url
+                # ולא admin_id). אם לא מוגדר — אוספים ומעבדים בלי לשלוח.
+                urgent_dispatcher: UrgentDispatcher | None = None
+                weekly_dispatcher: WeeklyDispatcher | None = None
+                bot_token = settings.telegram_bot_token.get_secret_value()
+                if bot_token:
+                    telegram_sender = TelegramSender(bot_token=bot_token)
+                    urgent_dispatcher = UrgentDispatcher(db=db, sender=telegram_sender)
+                    weekly_dispatcher = WeeklyDispatcher(db=db, sender=telegram_sender)
+                    logger.info("worker.dispatcher.enabled")
+                else:
+                    logger.warning(
+                        "worker.dispatcher.skipped",
+                        reason="TELEGRAM_BOT_TOKEN חסר",
+                    )
+
                 scheduler = build_scheduler(
                     runner,
                     timezone=settings.timezone,
                     run_at_startup=True,
                     ai_processor=ai_processor,
+                    urgent_dispatcher=urgent_dispatcher,
+                    weekly_dispatcher=weekly_dispatcher,
                 )
 
                 scheduler.start()
@@ -88,6 +110,7 @@ async def main() -> None:
                     "worker.ready",
                     source_count=len(sources),
                     ai_enabled=ai_processor is not None,
+                    dispatcher_enabled=urgent_dispatcher is not None,
                 )
 
                 # המתנה ל-SIGTERM/SIGINT
@@ -106,6 +129,12 @@ async def main() -> None:
                         scheduler.shutdown(wait=False)
                     except Exception:
                         logger.exception("worker.scheduler_shutdown_failed")
+                # סוגרים את ה-http client של ה-sender אחרי ה-scheduler
+                if telegram_sender is not None:
+                    try:
+                        await telegram_sender.close()
+                    except Exception:
+                        logger.exception("worker.sender_close_failed")
     finally:
         if mongo_connected:
             try:

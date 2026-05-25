@@ -18,7 +18,7 @@
   - [ ] Anthropic (SPA — Playwright) — בעתיד, אופציונלי
 - [x] שלב 3 — AI Layer (Gemini 2.5 Flash עם structured output)
 - [x] שלב 4 — פלואו רישום אינטראקטיבי + כל פקודות הניהול
-- [ ] שלב 5 — Dispatcher (התראות + סיכום שבועי)
+- [x] שלב 5 — Dispatcher (התראות מיידיות + סיכום שבועי)
 
 ## מבנה הפרויקט
 

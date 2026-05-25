@@ -9,6 +9,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.ai.processor import AIProcessor
 from app.collectors.runner import CollectorRunner
+from app.dispatcher.urgent import UrgentDispatcher
+from app.dispatcher.weekly import WeeklyDispatcher
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -20,6 +22,8 @@ def build_scheduler(
     timezone: str = "Asia/Jerusalem",
     run_at_startup: bool = True,
     ai_processor: AIProcessor | None = None,
+    urgent_dispatcher: UrgentDispatcher | None = None,
+    weekly_dispatcher: WeeklyDispatcher | None = None,
 ) -> AsyncIOScheduler:
     """בונה scheduler עם cron triggers לפי סעיף 5.4 ב-Spec.
 
@@ -51,6 +55,33 @@ def build_scheduler(
             coalesce=True,
             max_instances=1,
             misfire_grace_time=120,
+        )
+
+    # Urgent dispatcher — job אופציונלי. Spec §8.1: שעתי.
+    if urgent_dispatcher is not None:
+        scheduler.add_job(
+            urgent_dispatcher.run,
+            trigger=CronTrigger(minute=0, timezone=timezone),
+            id="dispatch_urgent",
+            name="dispatch_urgent",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
+    # Weekly dispatcher — Spec §8.2: ראשון 08:00 שעון ישראל.
+    # APScheduler day_of_week: 0=Mon ... 6=Sun (תואם cron-style).
+    if weekly_dispatcher is not None:
+        scheduler.add_job(
+            weekly_dispatcher.run,
+            trigger=CronTrigger(
+                day_of_week="sun", hour=8, minute=0, timezone=timezone
+            ),
+            id="dispatch_weekly",
+            name="dispatch_weekly",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,  # שעה — שווה לנסות גם אם איחרנו
         )
 
     if run_at_startup:
