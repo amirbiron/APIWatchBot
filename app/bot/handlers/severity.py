@@ -30,9 +30,14 @@ async def severity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("עוד לא נרשמת. שלח /start כדי להתחיל.")
         return
 
-    # מצב מיוחד — re-pick של severity מחוץ לפלואו הראשי. ה-callback handler
-    # מזהה את הסיטואציה לפי conversation_state ולא מקדם אוטומטית לשלב הבא.
-    await repo.set_conversation_state(user.id, "selecting_severity")
+    # פקודת /severity היא תמיד edit standalone. ניקוי מפורש של
+    # in_initial_setup למקרה ש-/start ננטש באמצע — בלי זה ה-callback של
+    # sev:* היה מקדם אותו לשלב frequency כאילו זה הפלואו הראשי.
+    await repo.set_conversation_state(
+        user.id,
+        "selecting_severity",
+        extra={"in_initial_setup": False},
+    )
     await update.message.reply_text(
         "בחר רמת חומרה מינימלית:",
         reply_markup=build_severity_keyboard(doc.get("min_severity")),

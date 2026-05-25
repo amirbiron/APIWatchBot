@@ -30,8 +30,15 @@ async def apis_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("עוד לא נרשמת. שלח /start כדי להתחיל.")
         return
 
-    # מצב חוזר מאפשר שימוש חוזר באותו toggle handler.
-    await repo.set_conversation_state(user.id, "selecting_apis")
+    # פקודת /apis היא תמיד edit standalone — לא חלק מהפלואו הראשי. מנקים
+    # את in_initial_setup במפורש למקרה שמשתמש נטש /start באמצע (השאיר
+    # flag=True ב-DB) ועכשיו משתמש ב-/apis. בלי הניקוי, ה-callback של
+    # api:done היה מקדם אותו לשלב severity במקום לסיים.
+    await repo.set_conversation_state(
+        user.id,
+        "selecting_apis",
+        extra={"in_initial_setup": False},
+    )
     await update.message.reply_text(
         "בחר ספקים — לחץ על שורה כדי לסמן/לבטל, ובסיום על <b>סיום</b>:",
         parse_mode="HTML",

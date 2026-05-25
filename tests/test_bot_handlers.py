@@ -387,6 +387,73 @@ async def test_apis_handler_sets_state_without_initial_flag() -> None:
 
 
 @pytest.mark.asyncio
+async def test_apis_handler_clears_stale_initial_flag() -> None:
+    """תרחיש: משתמש התחיל /start, נטש באמצע (נשאר in_initial_setup=True),
+    ועכשיו פותח /apis. ה-flag חייב להתאפס כדי שה-callback לא יחטוף אותו
+    לפלואו הראשי."""
+    from app.bot.handlers.apis import apis_handler
+    from app.bot.handlers.callbacks import callback_router
+
+    ctx, repo, _ = await _make_context_with_user()
+    await repo.get_or_create(telegram_id=42)
+    # סימולציה: משתמש נטש /start באמצע
+    await repo.set_conversation_state(
+        42, "selecting_apis", extra={"in_initial_setup": True}
+    )
+
+    # עכשיו מתחיל /apis
+    await apis_handler(
+        _FakeUpdate(effective_user=_FakeUser(id=42), message=_FakeMessage()),
+        ctx,
+    )
+
+    doc = await repo.get(42)
+    assert doc.get("in_initial_setup") is False
+
+    # ובהמשך — done בלי בחירות אינו מקדם לפלואו ראשי, ו-done עם בחירות
+    # מסיים ל-idle ולא ל-selecting_severity.
+    await repo.toggle_subscription(42, "openai")
+    cb = _FakeCallbackQuery(data="api:done", from_user=_FakeUser(id=42))
+    await callback_router(
+        _FakeUpdate(effective_user=None, callback_query=cb), ctx
+    )
+    doc = await repo.get(42)
+    assert doc["conversation_state"] == "idle"  # standalone — מסיים מיד
+
+
+@pytest.mark.asyncio
+async def test_severity_handler_clears_stale_initial_flag() -> None:
+    """אותו תרחיש עבור /severity: stale flag לא יחטוף אותו לפלואו הראשי."""
+    from app.bot.handlers.callbacks import callback_router
+    from app.bot.handlers.severity import severity_handler
+
+    ctx, repo, _ = await _make_context_with_user()
+    await repo.get_or_create(telegram_id=42)
+    await repo.set_conversation_state(
+        42, "selecting_apis", extra={"in_initial_setup": True}
+    )
+
+    # /severity מתחיל
+    await severity_handler(
+        _FakeUpdate(effective_user=_FakeUser(id=42), message=_FakeMessage()),
+        ctx,
+    )
+
+    doc = await repo.get(42)
+    assert doc.get("in_initial_setup") is False
+    assert doc["conversation_state"] == "selecting_severity"
+
+    # ובחירת severity מסיימת ל-idle (לא מתקדמת ל-frequency).
+    cb = _FakeCallbackQuery(data="sev:critical", from_user=_FakeUser(id=42))
+    await callback_router(
+        _FakeUpdate(effective_user=None, callback_query=cb), ctx
+    )
+    doc = await repo.get(42)
+    assert doc["conversation_state"] == "idle"
+    assert doc["min_severity"] == "critical"
+
+
+@pytest.mark.asyncio
 async def test_settings_handler_shows_summary() -> None:
     from app.bot.handlers.settings import settings_handler
 
