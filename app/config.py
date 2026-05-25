@@ -76,6 +76,12 @@ class Settings(BaseSettings):
         )
 
     @property
+    def ai_configured(self) -> bool:
+        """האם יש לנו GEMINI_API_KEY תקין. אם לא, ה-AI Layer נדלק
+        ב-worker בלי לזרוק — רק מדלגים על job העיבוד וכותבים warning."""
+        return bool(self.gemini_api_key.get_secret_value())
+
+    @property
     def admin_notify_configured(self) -> bool:
         """האם אפשר לשלוח התראות אדמין. דורש token + admin_id, אבל לא
         webhook URL — worker שולח דרך Bot API ישירות, לא דרך ה-FastAPI."""

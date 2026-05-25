@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.ai.processor import AIProcessor
 from app.collectors.runner import CollectorRunner
 from app.logging_config import get_logger
 
@@ -17,10 +19,12 @@ def build_scheduler(
     *,
     timezone: str = "Asia/Jerusalem",
     run_at_startup: bool = True,
+    ai_processor: AIProcessor | None = None,
 ) -> AsyncIOScheduler:
     """בונה scheduler עם cron triggers לפי סעיף 5.4 ב-Spec.
 
     אם `run_at_startup=True` — מוסיף job שירוץ מיד (next_run_time=datetime.now()).
+    אם `ai_processor` מועבר — מוסיף job AI כל 5 דקות.
     """
     scheduler = AsyncIOScheduler(timezone=timezone)
 
@@ -36,6 +40,18 @@ def build_scheduler(
         max_instances=1,
         misfire_grace_time=600,
     )
+
+    # AI processor — job אופציונלי שרץ אם יש GEMINI_API_KEY.
+    if ai_processor is not None:
+        scheduler.add_job(
+            ai_processor.run_batch,
+            trigger=IntervalTrigger(minutes=5, timezone=timezone),
+            id="process_ai_batch",
+            name="process_ai_batch",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=120,
+        )
 
     if run_at_startup:
         # job חד-פעמי שירוץ מיד אחרי scheduler.start().

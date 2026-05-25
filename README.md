@@ -16,7 +16,7 @@
   - [x] שלב 2b — Wave 2 (HTML scraping: Telegram, Stripe, GBP, Gemini)
   - [x] שלב 2c — Wave 3 (Meta Graph + WhatsApp+Green עם retries והתראות אדמין)
   - [ ] Anthropic (SPA — Playwright) — בעתיד, אופציונלי
-- [ ] שלב 3 — AI Layer (Gemini)
+- [x] שלב 3 — AI Layer (Gemini 2.5 Flash עם structured output)
 - [ ] שלב 4 — פלואו רישום מלא
 - [ ] שלב 5 — Dispatcher (התראות + סיכום שבועי)
 

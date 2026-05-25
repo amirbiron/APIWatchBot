@@ -10,6 +10,8 @@ import signal
 
 import httpx
 
+from app.ai.client import GeminiClient
+from app.ai.processor import AIProcessor
 from app.collectors.registry import build_sources
 from app.collectors.runner import CollectorRunner
 from app.config import get_settings
@@ -56,13 +58,37 @@ async def main() -> None:
             try:
                 sources = build_sources(http_client)
                 runner = CollectorRunner(sources=sources, db=db)
+
+                # AI processor — אופציונלי. בלי GEMINI_API_KEY הworker
+                # עדיין רץ ואוסף raw items; הם פשוט יישארו ב-status="raw"
+                # עד שה-key יוגדר.
+                ai_processor: AIProcessor | None = None
+                if settings.ai_configured:
+                    ai_client = GeminiClient(
+                        api_key=settings.gemini_api_key.get_secret_value()
+                    )
+                    ai_processor = AIProcessor(db=db, ai_client=ai_client)
+                    logger.info("worker.ai.enabled")
+                else:
+                    logger.warning(
+                        "worker.ai.skipped",
+                        reason="GEMINI_API_KEY חסר",
+                    )
+
                 scheduler = build_scheduler(
-                    runner, timezone=settings.timezone, run_at_startup=True
+                    runner,
+                    timezone=settings.timezone,
+                    run_at_startup=True,
+                    ai_processor=ai_processor,
                 )
 
                 scheduler.start()
                 scheduler_started = True
-                logger.info("worker.ready", source_count=len(sources))
+                logger.info(
+                    "worker.ready",
+                    source_count=len(sources),
+                    ai_enabled=ai_processor is not None,
+                )
 
                 # המתנה ל-SIGTERM/SIGINT
                 stop_event = asyncio.Event()
