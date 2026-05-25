@@ -294,6 +294,95 @@ async def test_processor_survives_db_write_failure(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_processor_survives_db_query_failure(monkeypatch) -> None:
+    """ה-query הראשוני נכשל (mongo down) — חוזר summary ריק, לא זורק.
+    החוזה הזה קריטי כדי שAPScheduler לא יסמן את ה-job ככשל וירידות."""
+    db = await _fresh_db()
+
+    # collection ש-find מחזיר cursor שזורק ב-to_list
+    class _BrokenCursor:
+        def sort(self, *a, **kw):
+            return self
+
+        def limit(self, *a, **kw):
+            return self
+
+        async def to_list(self, *a, **kw):
+            raise RuntimeError("simulated mongo outage")
+
+    class _BrokenUpdates:
+        def find(self, *args, **kwargs):
+            return _BrokenCursor()
+
+    broken_db = type(
+        "DB",
+        (),
+        {"updates": _BrokenUpdates(), "system_state": db.system_state},
+    )()
+
+    ai = _FakeAIClient({})
+
+    from app.ai import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "notify_admin", _noop_notify)
+
+    summary = await AIProcessor(db=broken_db, ai_client=ai).run_batch()
+    assert summary.fetched == 0
+    assert summary.processed == 0
+
+
+@pytest.mark.asyncio
+async def test_processor_survives_unexpected_exception_in_process_one(monkeypatch) -> None:
+    """אם _process_one זרק (באג עתידי), gather עם return_exceptions=True
+    מבטיח שה-batch לא נופל — ה-item מסומן failed וממשיכים."""
+    db = await _fresh_db()
+    await _seed_raw(db, "render")
+    await _seed_raw(db, "openai")
+
+    ai = _FakeAIClient(
+        {
+            "render": {
+                "is_noise": False,
+                "summary_he": "x",
+                "severity": "info",
+                "is_urgent": False,
+                "categories": [],
+            },
+            "openai": {
+                "is_noise": False,
+                "summary_he": "y",
+                "severity": "info",
+                "is_urgent": False,
+                "categories": [],
+            },
+        }
+    )
+
+    from app.ai import processor as proc_mod
+
+    notified: list[str] = []
+    monkeypatch.setattr(proc_mod, "notify_admin", _capture(notified))
+
+    processor = AIProcessor(db=db, ai_client=ai)
+
+    # מחליפים _process_one אצל instance כך שיזרוק על api_id=render
+    original_process_one = processor._process_one
+
+    async def _boom_on_render(doc):
+        if doc.get("api_id") == "render":
+            raise RuntimeError("simulated bug in _process_one")
+        return await original_process_one(doc)
+
+    monkeypatch.setattr(processor, "_process_one", _boom_on_render)
+
+    summary = await processor.run_batch()
+    # ה-batch לא נפל; ה-render סומן failed וה-openai עבר
+    assert summary.fetched == 2
+    assert summary.failed == 1
+    assert summary.processed == 1
+
+
+@pytest.mark.asyncio
 async def test_processor_empty_batch_short_circuits(monkeypatch) -> None:
     """אין items → לא קוראים ל-AI ולא שולחים alert."""
     db = await _fresh_db()

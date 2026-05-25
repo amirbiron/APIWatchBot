@@ -62,15 +62,31 @@ class AIProcessor:
         self._semaphore = asyncio.Semaphore(concurrency)
 
     async def run_batch(self) -> BatchSummary:
-        """מעבד עד `batch_size` items. תמיד מחזיר summary — לא זורק."""
+        """מעבד עד `batch_size` items. **תמיד מחזיר summary — לא זורק**.
+
+        כל מקור פוטנציאלי לחריגה (Mongo query ראשוני, gather של coroutines,
+        write_state, send_alert) עטוף בנפרד. החוזה הזה קריטי כי
+        APScheduler מסמן את ה-job ככשל אם המתודה זורקת, וזה עלול לעצור
+        ריצות עתידיות בתלות בתצורת ה-job.
+        """
         started_at = datetime.now(timezone.utc)
 
-        cursor = (
-            self._db.updates.find({"status": "raw"})
-            .sort("collected_at", 1)
-            .limit(self._batch_size)
-        )
-        docs = await cursor.to_list(length=self._batch_size)
+        # ה-query הראשוני יכול להיכשל אם Mongo זמני לא זמין. מחזירים
+        # summary ריק במקום לזרוק.
+        try:
+            cursor = (
+                self._db.updates.find({"status": "raw"})
+                .sort("collected_at", 1)
+                .limit(self._batch_size)
+            )
+            docs = await cursor.to_list(length=self._batch_size)
+        except Exception:
+            logger.exception("ai.run.fetch_failed")
+            finished_at = datetime.now(timezone.utc)
+            return BatchSummary(
+                started_at=started_at, finished_at=finished_at, fetched=0
+            )
+
         logger.info("ai.run.start", fetched=len(docs))
 
         if not docs:
@@ -79,11 +95,33 @@ class AIProcessor:
                 started_at=started_at, finished_at=finished_at, fetched=0
             )
 
-        # עיבוד מקבילי עם semaphore. כל coroutine מטפלת ב-doc אחד מקצה לקצה.
-        results = await asyncio.gather(
+        # עיבוד מקבילי. return_exceptions=True מבטיח שגם אם _process_one
+        # יזרוק (באג עתידי / בעיה לא צפויה), gather לא מפיץ — מקבלים
+        # exception object ברשימה ויכולים לטפל בנפרד.
+        raw_results = await asyncio.gather(
             *(self._process_with_limit(doc) for doc in docs),
-            return_exceptions=False,  # _process_one כבר תופס הכל
+            return_exceptions=True,
         )
+
+        results: list[ItemResult] = []
+        for doc, raw in zip(docs, raw_results):
+            if isinstance(raw, BaseException):
+                # _process_one לא אמור לזרוק (יש בו try/except), אבל
+                # אם בכל זאת זרק — מסמנים failed בלי להפיל את ה-batch.
+                logger.exception(
+                    "ai.run.process_one_raised",
+                    update_id=str(doc.get("_id")),
+                    error_type=type(raw).__name__,
+                )
+                results.append(
+                    ItemResult(
+                        update_id=doc.get("_id"),
+                        status="failed",
+                        error=f"{type(raw).__name__}: {raw}",
+                    )
+                )
+            else:
+                results.append(raw)
 
         finished_at = datetime.now(timezone.utc)
         summary = BatchSummary(
@@ -93,7 +131,7 @@ class AIProcessor:
             processed=sum(1 for r in results if r.status == "processed"),
             skipped_noise=sum(1 for r in results if r.status == "skipped_noise"),
             failed=sum(1 for r in results if r.status == "failed"),
-            results=list(results),
+            results=results,
         )
 
         logger.info(
@@ -104,12 +142,15 @@ class AIProcessor:
             failed=summary.failed,
         )
 
-        # סיכום state — לא חוסם, מקובץ ב-try נפרד
+        # סיכום state — _write_state כבר עטוף ב-try/except פנימי
         await self._write_state(summary)
 
-        # התראה אחת מקובצת אם היו כשלים — מונע ספאם פר item.
+        # התראה אחת מקובצת אם היו כשלים — notify_admin עצמה swallow-er של חריגות
         if summary.failed > 0:
-            await self._send_failure_alert(summary)
+            try:
+                await self._send_failure_alert(summary)
+            except Exception:
+                logger.exception("ai.run.alert_failed")
 
         return summary
 
