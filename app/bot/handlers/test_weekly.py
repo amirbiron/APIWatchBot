@@ -88,13 +88,42 @@ async def test_weekly_handler(
             "✅ הסיכום נשלח. (שים לב: הפריטים סומנו ב-deliveries — "
             "ה-cron הקרוב לא יחזור עליהם.)"
         )
-    elif summary.send_failures > 0:
+        return
+
+    if summary.send_failures > 0:
         # send_failures מוגדל רק במסלול שבו _dispatch_for_user תפס כשל
         # שליחה ושחרר claims בעצמו. חריגות לא-צפויות יוצאות במסלול error.
         await update.message.reply_text(
             "❌ ניסיון השליחה נכשל. ה-claims שוחררו — אפשר לנסות שוב."
         )
-    else:
-        await update.message.reply_text(
-            "ℹ️ אין עדכונים חדשים לשלוח (כל הפריטים נשלחו כבר או שאין מה לסכם)."
+        return
+
+    # אין מה לשלוח — מסבירים *למה* על בסיס ה-diagnostics.
+    diag = summary.diagnostics or {}
+    if diag.get("subscribed_count", 0) == 0:
+        reason = "אין לך מנויים על אף API. שלח /apis כדי להירשם."
+    elif diag.get("candidates", 0) == 0:
+        reason = (
+            f"לא נמצאו עדכונים מעובדים ב-7 הימים האחרונים שתואמים "
+            f"למנויים שלך ולרמת severity ({diag.get('min_severity')}).\n"
+            f"מנויים: {diag.get('subscribed_count')}, candidates: 0."
         )
+    elif diag.get("new_items", 0) == 0:
+        reason = (
+            f"כל ה-{diag.get('candidates')} העדכונים שתואמים כבר נשלחו "
+            f"אליך (deliveries dedup).\n"
+            f"already_delivered: {diag.get('already_delivered')}."
+        )
+    elif diag.get("claimed", 0) == 0:
+        reason = (
+            f"היו {diag.get('new_items')} פריטים חדשים אבל כולם נתפסו "
+            f"בינתיים ע\"י תהליך אחר (race עם urgent/cron)."
+        )
+    else:
+        # claimed>0 אבל digests_sent==0 — כנראה build_weekly_digest החזיר None.
+        reason = (
+            f"נתפסו {diag.get('claimed')} פריטים אבל ה-digest לא נבנה "
+            f"(build_weekly_digest החזיר None). בדוק לוגים."
+        )
+
+    await update.message.reply_text(f"ℹ️ אין מה לשלוח.\n\n{reason}")

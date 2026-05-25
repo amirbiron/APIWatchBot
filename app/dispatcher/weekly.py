@@ -51,6 +51,10 @@ class WeeklyRunSummary:
     # None | "db_error" | "unexpected". send_failures לעומת זאת — claims
     # שוחררו בוודאות (ראה _dispatch_for_user).
     error: str | None = None
+    # רק במסלול הידני (run_for_telegram_id) — פירוט איפה הריצה נחתכה.
+    # מפתחות: subscribed_count, min_severity, paused, frequency,
+    # candidates, already_delivered, new_items, claimed.
+    diagnostics: dict[str, Any] | None = None
 
 
 class WeeklyDispatcher:
@@ -129,9 +133,13 @@ class WeeklyDispatcher:
         summary.users_checked = 1
         cutoff = started - self._lookback
         date_range = format_date_range(cutoff, started)
+        diagnostics: dict[str, Any] = {}
+        summary.diagnostics = diagnostics
 
         try:
-            await self._dispatch_for_user(user, cutoff, date_range, summary)
+            await self._dispatch_for_user(
+                user, cutoff, date_range, summary, diagnostics=diagnostics
+            )
         except Exception:
             # חריגה לא-צפויה ב-_dispatch_for_user (לא send failure רגיל).
             # send failure רגיל נתפס בתוך _dispatch_for_user ושם משחררים
@@ -164,8 +172,14 @@ class WeeklyDispatcher:
         cutoff: datetime,
         date_range: str,
         summary: WeeklyRunSummary,
+        diagnostics: dict[str, Any] | None = None,
     ) -> None:
         subscribed = user.get("subscribed_apis") or []
+        if diagnostics is not None:
+            diagnostics["subscribed_count"] = len(subscribed)
+            diagnostics["min_severity"] = user.get("min_severity", "important")
+            diagnostics["paused"] = bool(user.get("paused", False))
+            diagnostics["frequency"] = user.get("frequency", "weekly")
         if not subscribed:
             return  # משתמש בלי מנויים — אין מה לשלוח
 
@@ -184,6 +198,8 @@ class WeeklyDispatcher:
             }
         ).sort("processed_at", -1)
         candidates = await cursor.to_list(length=None)
+        if diagnostics is not None:
+            diagnostics["candidates"] = len(candidates)
         if not candidates:
             return
 
@@ -193,6 +209,9 @@ class WeeklyDispatcher:
             user["_id"], candidate_ids
         )
         new_items = [c for c in candidates if c["_id"] not in already_delivered]
+        if diagnostics is not None:
+            diagnostics["already_delivered"] = len(already_delivered)
+            diagnostics["new_items"] = len(new_items)
         if not new_items:
             return
 
@@ -207,6 +226,8 @@ class WeeklyDispatcher:
             ):
                 claimed_items.append(item)
 
+        if diagnostics is not None:
+            diagnostics["claimed"] = len(claimed_items)
         if not claimed_items:
             # כל הפריטים נתפסו בינתיים ע"י תהליך אחר — דלג.
             return
