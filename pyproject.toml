@@ -20,6 +20,7 @@ dependencies = [
     "feedparser>=6.0.11",
     "apscheduler>=3.10.4",
     "pytz>=2024.2",
+    "selectolax>=0.3.21",
 ]
 
 [project.optional-dependencies]

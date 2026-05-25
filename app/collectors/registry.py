@@ -8,18 +8,28 @@ from __future__ import annotations
 import httpx
 
 from app.collectors.base import BaseSource
+from app.collectors.sources.google_business import GoogleBusinessSource
+from app.collectors.sources.google_gemini import GoogleGeminiSource
 from app.collectors.sources.openai import OpenAISource
 from app.collectors.sources.render import RenderSource
+from app.collectors.sources.stripe import StripeSource
+from app.collectors.sources.telegram import TelegramSource
 from app.collectors.sources.twilio import TwilioSource
 
 # סוג המקור — class ולא instance — כדי שה-Runner ייצור אותם עם ה-http client.
 SourceClass = type[BaseSource]
 
 ALL_SOURCES: list[SourceClass] = [
+    # Wave 1 — RSS feeds
     RenderSource,
     OpenAISource,
     TwilioSource,
-    # Wave 2 ו-3 ייתווספו ב-PR הבא.
+    # Wave 2 — HTML scraping
+    TelegramSource,
+    StripeSource,
+    GoogleBusinessSource,
+    GoogleGeminiSource,
+    # Wave 3 (Anthropic SPA, WhatsApp+Green, Meta) — ייתווסף ב-PR נפרד.
 ]
 
 
