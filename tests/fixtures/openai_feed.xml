@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>OpenAI Developer Blog</title>
+  <link>https://developers.openai.com</link>
+  <description>Updates from OpenAI for developers</description>
+  <item>
+    <title>New API endpoint: /responses</title>
+    <link>https://developers.openai.com/api/docs/changelog/2026-05-20-responses</link>
+    <description>A new unified Responses API is now generally available.</description>
+    <pubDate>Tue, 20 May 2026 09:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Blog post: Building agents with the Responses API</title>
+    <link>https://developers.openai.com/blog/agents-responses-api</link>
+    <description>A deep dive into agent patterns.</description>
+    <pubDate>Tue, 20 May 2026 10:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Deprecation: gpt-3.5-turbo-0301</title>
+    <link>https://developers.openai.com/api/docs/changelog/2026-05-15-deprecation</link>
+    <description>gpt-3.5-turbo-0301 will be removed on June 13.</description>
+    <pubDate>Thu, 15 May 2026 12:00:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>

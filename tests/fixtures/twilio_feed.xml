@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Twilio Changelog</title>
+  <link>https://www.twilio.com/changelog</link>
+  <description>Twilio API changes</description>
+  <item>
+    <title>Voice API: New recording format</title>
+    <link>https://www.twilio.com/en-us/changelog/voice-recording-opus</link>
+    <description>Recordings can now be stored in Opus format.</description>
+    <pubDate>Mon, 19 May 2026 16:00:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>
