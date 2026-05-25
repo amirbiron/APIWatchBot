@@ -45,6 +45,17 @@ class BatchSummary:
     results: list[ItemResult] = field(default_factory=list)
 
 
+def _db_write_failed_result(update_id: Any) -> ItemResult:
+    """תוצאה אחידה לכל שלושת המסלולים כש-DB write נכשל.
+    ה-item יישאר status="raw" וייכנס שוב לבאצ' הבא — זה מקובל,
+    כי כשל DB הוא בדרך כלל חולף."""
+    return ItemResult(
+        update_id=update_id,
+        status="failed",
+        error="db_write_failed",
+    )
+
+
 class AIProcessor:
     """עיבוד אצווה של raw items עם Gemini."""
 
@@ -180,29 +191,30 @@ class AIProcessor:
         try:
             response = await self._client.generate(prompt)
         except GeminiAPIError as e:
-            await self._safe_mark_failed(update_id, str(e))
+            if not await self._safe_mark_failed(update_id, str(e)):
+                return _db_write_failed_result(update_id)
             return ItemResult(update_id=update_id, status="failed", error=str(e))
         except Exception as e:  # noqa: BLE001 — שמירה על no-throw
             logger.exception("ai.process.unexpected", update_id=str(update_id))
             error_msg = f"unexpected: {type(e).__name__}: {e}"
-            await self._safe_mark_failed(update_id, error_msg)
+            if not await self._safe_mark_failed(update_id, error_msg):
+                return _db_write_failed_result(update_id)
             return ItemResult(update_id=update_id, status="failed", error=error_msg)
 
         # is_noise=true → skipped_noise
         if response.get("is_noise"):
-            await self._safe_mark_skipped_noise(update_id)
+            if not await self._safe_mark_skipped_noise(update_id):
+                # אסור לדווח skipped_noise אם ה-DB write נכשל — ה-item
+                # יישאר status="raw" וייקרא שוב לGemini בריצה הבאה,
+                # ויסומן שוב כ-noise, וכך עד אינסוף (בזבוז קרדיט).
+                return _db_write_failed_result(update_id)
             return ItemResult(update_id=update_id, status="skipped_noise")
 
         # תוצאה תקינה
-        ok = await self._safe_mark_processed(update_id, response)
-        if not ok:
-            # DB write נכשל אבל ה-AI הצליח. מסמנים את התוצאה כ-failed כדי שיתעבד שוב
-            # בריצה הבאה (status נשאר "raw" כי ה-update_one נכשל).
-            return ItemResult(
-                update_id=update_id,
-                status="failed",
-                error="db_write_failed_after_ai_success",
-            )
+        if not await self._safe_mark_processed(update_id, response):
+            # DB write נכשל אבל ה-AI הצליח. מסמנים failed כדי שlummary
+            # יהיה מדויק; ה-item יישאר status="raw" וינסה שוב בריצה הבאה.
+            return _db_write_failed_result(update_id)
         return ItemResult(update_id=update_id, status="processed")
 
     async def _safe_mark_processed(
@@ -229,7 +241,9 @@ class AIProcessor:
             )
             return False
 
-    async def _safe_mark_skipped_noise(self, update_id: Any) -> None:
+    async def _safe_mark_skipped_noise(self, update_id: Any) -> bool:
+        """מחזיר True רק אם ה-DB write הצליח. כשל פירושו שה-item
+        יישאר status="raw" ויעבד שוב — הקורא חייב להתמודד עם זה."""
         try:
             await self._db.updates.update_one(
                 {"_id": update_id},
@@ -240,15 +254,19 @@ class AIProcessor:
                     }
                 },
             )
+            return True
         except Exception:
             logger.exception(
                 "ai.mark_skipped.db_failed", update_id=str(update_id)
             )
+            return False
 
-    async def _safe_mark_failed(self, update_id: Any, error: str) -> None:
+    async def _safe_mark_failed(self, update_id: Any, error: str) -> bool:
         """שומר את הודעת השגיאה ב-`last_error` כדי שאפשר יהיה לאבחן
         כשל מ-DB בלי לחצב לוגים. ה-string מקוצר ל-500 תווים — מספיק
-        לסיווג, מונע נפיחות בdocs בקצה."""
+        לסיווג, מונע נפיחות בdocs בקצה.
+
+        מחזיר True רק אם ה-DB write הצליח (לעקביות עם השאר)."""
         try:
             await self._db.updates.update_one(
                 {"_id": update_id},
@@ -260,12 +278,14 @@ class AIProcessor:
                     }
                 },
             )
+            return True
         except Exception:
             logger.exception(
                 "ai.mark_failed.db_failed",
                 update_id=str(update_id),
                 original_error=error[:200],
             )
+            return False
 
     async def _write_state(self, summary: BatchSummary) -> None:
         try:

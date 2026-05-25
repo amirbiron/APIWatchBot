@@ -243,6 +243,72 @@ async def test_processor_writes_state(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_processor_skipped_noise_db_failure_reports_failed(monkeypatch) -> None:
+    """אם ה-DB write של mark_skipped_noise נכשל — ה-item חייב להידווח
+    כ-failed, לא כ-skipped_noise. אחרת ה-status נשאר raw ב-DB וניסיון
+    הבא יבזבז קרדיט Gemini שוב על אותו פריט."""
+    db = await _fresh_db()
+    item_id = await _seed_raw(db, "render")
+
+    ai = _FakeAIClient(
+        {
+            "render": {
+                "is_noise": True,
+                "summary_he": "",
+                "severity": "info",
+                "is_urgent": False,
+                "categories": [],
+            }
+        }
+    )
+
+    from app.ai import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "notify_admin", _noop_notify)
+
+    processor = AIProcessor(db=db, ai_client=ai)
+
+    # _safe_mark_skipped_noise מחזיר False (DB write נכשל)
+    async def _mark_fails(update_id):
+        return False
+
+    monkeypatch.setattr(processor, "_safe_mark_skipped_noise", _mark_fails)
+
+    summary = await processor.run_batch()
+    assert summary.skipped_noise == 0
+    assert summary.failed == 1
+    # ה-item נשאר raw — יתעבד שוב, אבל summary מדויק = admin alert נשלח
+    doc = await db.updates.find_one({"_id": item_id})
+    assert doc["status"] == "raw"
+
+
+@pytest.mark.asyncio
+async def test_processor_mark_failed_db_failure_still_reports_failed(monkeypatch) -> None:
+    """גם כש-_safe_mark_failed נכשל ב-DB, ה-summary מדווח failed
+    (לא הצלחה שקטה). לא משנה ה-status ב-DB — הוא נשאר raw בכל מקרה."""
+    db = await _fresh_db()
+    await _seed_raw(db, "twilio")
+
+    ai = _FakeAIClient({"twilio": GeminiAPIError("nope")})
+
+    from app.ai import processor as proc_mod
+
+    notified: list[str] = []
+    monkeypatch.setattr(proc_mod, "notify_admin", _capture(notified))
+
+    processor = AIProcessor(db=db, ai_client=ai)
+
+    async def _mark_fails(update_id, error):
+        return False
+
+    monkeypatch.setattr(processor, "_safe_mark_failed", _mark_fails)
+
+    summary = await processor.run_batch()
+    assert summary.failed == 1
+    assert len(notified) == 1  # admin alert עבד
+
+
+@pytest.mark.asyncio
 async def test_processor_survives_db_write_failure(monkeypatch) -> None:
     """כשל ב-DB write פר item לא יפיל את ה-batch (no-throw contract)."""
     db = await _fresh_db()
