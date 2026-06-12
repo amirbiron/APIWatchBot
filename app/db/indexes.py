@@ -33,9 +33,16 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
                 [("api_id", ASCENDING), ("collected_at", DESCENDING)],
                 name="api_id_collected_at",
             ),
+            # urgent dispatcher: cutoff עיקרי לפי processed_at ("מתי
+            # למדנו עליו"). ה-weekly dispatcher: לפי source_published_at
+            # ("מתי הספק פרסם בפועל").
             IndexModel(
                 [("is_urgent", ASCENDING), ("processed_at", DESCENDING)],
                 name="urgent_processed_at",
+            ),
+            IndexModel(
+                [("source_published_at", DESCENDING)],
+                name="source_published_at",
             ),
             IndexModel([("status", ASCENDING)], name="status"),
         ]

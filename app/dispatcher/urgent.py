@@ -1,7 +1,8 @@
 """שולח התראות מיידיות (Spec §8.1). תזמון: שעתי.
 
 לוגיקה:
-1. שלוף updates עם is_urgent=True, status=processed, processed_at ב-24h.
+1. שלוף updates עם is_urgent=True, status=processed, processed_at ב-24h
+   (חלון "מתי למדנו עליו"); מסננים backfill ישן (source_published_at > 30 יום).
 2. עבור כל update — שלוף משתמשים מנויים שלא מושהים שמסכימים לדחוף.
 3. claim אטומי דרך delivery + send. במקרה כשל send — log + continue.
 """
@@ -23,6 +24,13 @@ logger = get_logger(__name__)
 
 # חלון הזמן ל-updates דחופים (Spec §8.1).
 _LOOKBACK_HOURS = 24
+
+# חלון מקסימלי של "טריות" לפי תאריך הפרסום של הספק. urgent הוא
+# "מצאנו עכשיו משהו קריטי" — אז ה-cutoff העיקרי הוא processed_at (מתי
+# למדנו עליו), אבל מסננים החוצה backfill של עדכונים ישנים-מאוד שלא
+# הגיוני להתריע עליהם עכשיו. פריט בלי source_published_at (לא חולץ
+# תאריך) מקבל הטבת הספק — נכלל ולא נאבד.
+_MAX_PUBLISHED_AGE_DAYS = 30
 
 # מיפוי הפוך ל-SEVERITY_SETS של weekly: לכל update.severity, אילו ערכי
 # min_severity של משתמש מקבלים אותו. "critical" של הupdate מתקבל בכל
@@ -87,12 +95,23 @@ class UrgentDispatcher:
         return summary
 
     async def _fetch_urgent_updates(self, now: datetime) -> list[dict[str, Any]]:
-        cutoff = now - self._lookback
+        # ה-cutoff העיקרי ב-urgent הוא processed_at — "מתי למדנו עליו",
+        # לא "מתי פורסם". כך פריט שפורסם לפני יומיים ונסרק עכשיו עדיין
+        # יישלח כ-urgent, ופריט בלי תאריך פרסום (null) לא נאבד.
+        # כדי שלא להציף ב-backfill ראשון של ארכיון בן שנים, מסננים
+        # החוצה רק פריטים עם תאריך פרסום ישן מאוד (>30 ימים). null
+        # מקבל הטבת הספק.
+        processed_cutoff = now - self._lookback
+        max_age_cutoff = now - timedelta(days=_MAX_PUBLISHED_AGE_DAYS)
         cursor = self._db.updates.find(
             {
                 "is_urgent": True,
                 "status": "processed",
-                "processed_at": {"$gte": cutoff},
+                "processed_at": {"$gte": processed_cutoff},
+                "$or": [
+                    {"source_published_at": None},
+                    {"source_published_at": {"$gte": max_age_cutoff}},
+                ],
             }
         )
         return await cursor.to_list(length=None)

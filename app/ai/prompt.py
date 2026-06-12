@@ -44,8 +44,22 @@ RESPONSE_SCHEMA: dict = {
             },
             "description": "1-3 תגיות",
         },
+        "published_date": {
+            "type": "string",
+            "description": (
+                "תאריך הפרסום של הפריט בפורמט YYYY-MM-DD. ריק אם לא ניתן "
+                "לקבוע בוודאות."
+            ),
+        },
     },
-    "required": ["is_noise", "summary_he", "severity", "is_urgent", "categories"],
+    "required": [
+        "is_noise",
+        "summary_he",
+        "severity",
+        "is_urgent",
+        "categories",
+        "published_date",
+    ],
 }
 
 
@@ -77,11 +91,24 @@ URL: {source_url}
   "summary_he": string,       // סיכום של 1-3 משפטים בעברית. אם is_noise=true, החזר ""
   "severity": "critical" | "important" | "info",
   "is_urgent": boolean,       // true רק אם נדרשת פעולה תוך 7 ימים (deprecation effective soon, breaking change live, security advisory)
-  "categories": [string]      // 1-3 תגיות מתוך: deprecation, breaking, new_feature, pricing, security, bugfix, performance
+  "categories": [string],     // 1-3 תגיות מתוך: deprecation, breaking, new_feature, pricing, security, bugfix, performance
+  "published_date": string    // תאריך הפרסום של הפריט בפורמט YYYY-MM-DD, או "" אם לא ניתן לקבוע
 }}
 
+הנחיות לתאריך הפרסום (published_date):
+- החזר את תאריך ה-*פרסום* של הפריט הזה, בד"כ מופיע בכותרת/header.
+- פורמט YYYY-MM-DD בלבד.
+- אם אינך בטוח, או שהתאריך שאתה רואה הוא תאריך אחר שמוזכר בגוף הטקסט (למשל "הוצא משימוש מאז 2021", "effective March 2027") ולא תאריך הפרסום — החזר "".
+- אל תנחש ואל תמציא תאריך.
+
 הנחיות לסיווג חומרה:
-- critical: deprecation עם תאריך תוקף, breaking change, security issue
+- critical:
+  • deprecation או shutdown עם תאריך תוקף קרוב
+  • breaking change (שינוי שובר תאימות)
+  • security issue (advisory/CVE)
+  • mandatory migration עם דדליין (גם בלי המילה "deprecation")
+  • credential/token invalidation (ביטול keys/tokens קיימים)
+  • הפחתה דרסטית של rate limit/quota שדורשת פעולה מיידית
 - important: תכונה משמעותית חדשה, שינוי תמחור, שינוי authentication
 - info: שיפורים, תכונות קטנות, תיקוני באגים
 

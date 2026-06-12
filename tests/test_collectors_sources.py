@@ -104,10 +104,9 @@ async def test_telegram_source_parses_html() -> None:
     assert items[0].raw_title == "May 20, 2026"
     assert "setMessageReaction" in items[0].raw_content
     assert "can_send_polls" in items[0].raw_content  # סיבלינג שני נאסף
-    # source_published_at נחלץ מהכותרת
-    assert items[0].source_published_at is not None
-    assert items[0].source_published_at.year == 2026
-    assert items[0].source_published_at.month == 5
+    # התאריך כבר לא נחלץ בסקראפר — הוא נשאר בכותרת ויחולץ ע"י Gemini.
+    assert items[0].source_published_at is None
+    assert items[0].raw_title == "May 20, 2026"
 
 
 @pytest.mark.asyncio
@@ -120,11 +119,41 @@ async def test_stripe_source_parses_table() -> None:
     assert len(items) == 3
     assert items[0].api_id == "stripe"
     assert "trial_will_end" in items[0].raw_content
-    assert items[0].source_published_at is not None
-    assert items[0].source_published_at.day == 20
+    # התאריך כבר לא מפורסר בסקראפר; הוא מוקדם לתוכן כדי ש-Gemini יחלץ אותו.
+    assert items[0].source_published_at is None
+    assert "2026" in items[0].raw_content
 
     # שורת ה-th לא נכנסה
     assert all("Description" not in i.raw_content for i in items)
+
+
+def test_stripe_content_hash_stable_across_date_in_content_change() -> None:
+    """הוספת התאריך ל-raw_content (כדי ש-Gemini יראה אותו) לא תשנה
+    את ה-content_hash, אחרת פריטים קיימים ייווצרו מחדש ככפילויות בריצה
+    הבאה. ה-custom_hash_input מבטיח hash זהה לפני ואחרי השינוי."""
+    from app.collectors.base import RawItem
+
+    title = "Added new webhook…"
+    description = "Added new webhook event customer.subscription.trial_will_end"
+
+    # מצב ישן: raw_content = description בלבד, hash דיפולטיבי.
+    old = RawItem(
+        api_id="stripe",
+        raw_title=title,
+        raw_content=description,
+        source_url="https://x",
+    )
+
+    # מצב חדש: התאריך מוקדם לתוכן + custom_hash_input על "title::description".
+    new = RawItem(
+        api_id="stripe",
+        raw_title=title,
+        raw_content=f"2026-05-20\n{description}",
+        source_url="https://x",
+        custom_hash_input=f"{title}::{description}",
+    )
+
+    assert old.content_hash == new.content_hash
 
 
 @pytest.mark.asyncio
@@ -209,7 +238,8 @@ async def test_meta_graph_parses_html() -> None:
     assert len(items) == 3
     assert items[0].api_id == "meta_graph"
     assert "v23.0" in items[0].raw_content
-    assert items[1].source_published_at is not None
+    # התאריך כבר לא מפורסר בסקראפר — יחולץ ע"י Gemini.
+    assert items[1].source_published_at is None
 
 
 @pytest.mark.asyncio

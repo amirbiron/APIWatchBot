@@ -16,7 +16,6 @@ from app.collectors.sources._html_utils import (
     extract_header_sections,
     fetch_html_with_retries,
     parse_html,
-    parse_iso_date,
 )
 from app.logging_config import get_logger
 
@@ -53,7 +52,6 @@ class WhatsAppMetaSource(BaseSource):
                     raw_title=title,
                     raw_content=content,
                     source_url=self.source_url,
-                    source_published_at=parse_iso_date(title),
                 )
             )
 
@@ -89,7 +87,6 @@ class WhatsAppGreenSource(BaseSource):
                     raw_title=title,
                     raw_content=content,
                     source_url=self.source_url,
-                    source_published_at=parse_iso_date(title),
                 )
             )
 

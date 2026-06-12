@@ -7,8 +7,8 @@ from selectolax.parser import HTMLParser
 
 from app.collectors.sources._html_utils import (
     clean_text,
+    looks_like_date,
     parse_html,
-    parse_iso_date,
 )
 
 
@@ -27,23 +27,31 @@ def test_clean_text_accepts_string() -> None:
     assert clean_text("  raw   text\n") == "raw text"
 
 
-def test_parse_iso_date_recognizes_common_formats() -> None:
-    assert parse_iso_date("2026-05-20") is not None
-    assert parse_iso_date("May 20, 2026") is not None
-    assert parse_iso_date("20 May 2026") is not None
+def test_looks_like_date_detects_year_and_month() -> None:
+    # שנה בת 4 ספרות
+    assert looks_like_date("2026-05-20") is True
+    assert looks_like_date("Changelog 2026") is True
+    # שם חודש באנגלית — גם בתוך משפט
+    assert looks_like_date("May 20, 2026") is True
+    assert looks_like_date("Updates for June") is True
 
 
-def test_parse_iso_date_returns_utc_aware() -> None:
-    result = parse_iso_date("2026-05-20")
-    assert result is not None
-    assert result.tzinfo is not None
+def test_looks_like_date_false_for_non_dates() -> None:
+    assert looks_like_date("yesterday") is False
+    assert looks_like_date("v2.5 release") is False
+    assert looks_like_date("") is False
+    assert looks_like_date(None) is False
 
 
-def test_parse_iso_date_returns_none_for_garbage() -> None:
-    """לא זורק על קלט לא מזוהה — מחזיר None."""
-    assert parse_iso_date("yesterday") is None
-    assert parse_iso_date("") is None
-    assert parse_iso_date(None) is None
+def test_looks_like_date_no_month_prefix_false_positives() -> None:
+    """מילים שמתחילות באותיות של חודש אך אינן חודש — לא תאריך.
+    קריטי ל-dedup של google_gemini (אחרת פריטים שונים מתמזגים)."""
+    assert looks_like_date("Marketing improvements") is False
+    assert looks_like_date("Marathon mode") is False
+    assert looks_like_date("Maybe later") is False
+    assert looks_like_date("Augmented reality") is False
+    assert looks_like_date("September") is True  # שם חודש מלא — כן
+    assert looks_like_date("Jan 2026") is True   # קיצור — כן
 
 
 @pytest.mark.asyncio

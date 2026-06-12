@@ -37,6 +37,14 @@ class _FakeAIClient:
         return response
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """mongomock מחזיר datetime נטול-tz (בפרוד הלקוח tz_aware). מנרמלים
+    ל-UTC-aware לצורך השוואה עקבית בטסטים."""
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 async def _fresh_db():
     client = AsyncMongoMockClient()
     db = client["test_apiwatch_ai"]
@@ -44,7 +52,13 @@ async def _fresh_db():
     return db
 
 
-async def _seed_raw(db, api_id: str, title: str = "t", content: str = "c") -> Any:
+async def _seed_raw(
+    db,
+    api_id: str,
+    title: str = "t",
+    content: str = "c",
+    source_published_at: datetime | None = None,
+) -> Any:
     """מכניס raw item ומחזיר את ה-_id."""
     doc = {
         "api_id": api_id,
@@ -56,6 +70,7 @@ async def _seed_raw(db, api_id: str, title: str = "t", content: str = "c") -> An
         "severity": None,
         "is_urgent": False,
         "categories": [],
+        "source_published_at": source_published_at,
         "collected_at": datetime.now(timezone.utc),
         "processed_at": None,
         "status": "raw",
@@ -106,6 +121,7 @@ async def test_processor_writes_full_result(monkeypatch) -> None:
         "severity": "critical",
         "is_urgent": True,
         "categories": ["deprecation", "breaking"],
+        "published_date": "2026-06-01",
     }
     ai = _FakeAIClient({"openai": payload})
 
@@ -124,6 +140,58 @@ async def test_processor_writes_full_result(monkeypatch) -> None:
     assert doc["severity"] == "critical"
     assert doc["is_urgent"] is True
     assert doc["categories"] == ["deprecation", "breaking"]
+    # התאריך שחילץ Gemini נשמר (לא היה תאריך קיים מה-collector)
+    assert _as_utc(doc["source_published_at"]) == datetime(
+        2026, 6, 1, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_processor_published_date_precedence_and_validation(monkeypatch) -> None:
+    """כלל הקדימות: תאריך collector קיים (RSS) מנצח את Gemini; אם אין —
+    משתמשים ב-Gemini; תאריך עתידי/לא תקין נדחה ל-None."""
+    db = await _fresh_db()
+    from app.ai import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "notify_admin", _noop_notify)
+
+    # 1. תאריך collector קיים — מנצח גם אם Gemini מחזיר תאריך אחר.
+    rss_date = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    id_rss = await _seed_raw(db, "render", source_published_at=rss_date)
+    # 2. אין תאריך collector — Gemini ממלא.
+    id_html = await _seed_raw(db, "telegram")
+    # 3. אין תאריך collector + Gemini מחזיר תאריך עתידי → נדחה ל-None.
+    id_future = await _seed_raw(db, "stripe")
+
+    def _payload(published_date: str) -> dict[str, Any]:
+        return {
+            "is_noise": False,
+            "summary_he": "x",
+            "severity": "info",
+            "is_urgent": False,
+            "categories": [],
+            "published_date": published_date,
+        }
+
+    ai = _FakeAIClient(
+        {
+            "render": _payload("2020-01-01"),   # Gemini אחר — אמור להידחות מול ה-collector
+            "telegram": _payload("2026-05-20"),
+            "stripe": _payload("2099-12-31"),    # עתידי
+        }
+    )
+
+    await AIProcessor(db=db, ai_client=ai).run_batch()
+
+    doc_rss = await db.updates.find_one({"_id": id_rss})
+    doc_html = await db.updates.find_one({"_id": id_html})
+    doc_future = await db.updates.find_one({"_id": id_future})
+
+    assert _as_utc(doc_rss["source_published_at"]) == rss_date  # collector ניצח
+    assert _as_utc(doc_html["source_published_at"]) == datetime(
+        2026, 5, 20, tzinfo=timezone.utc
+    )
+    assert doc_future["source_published_at"] is None  # עתידי נדחה
 
 
 @pytest.mark.asyncio

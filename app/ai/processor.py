@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import html
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -32,6 +32,10 @@ class ItemResult:
     update_id: Any
     status: str  # "processed" | "skipped_noise" | "failed"
     error: str | None = None
+    # True רק לפריט שעבר ל-processed אך נשאר בלי source_published_at —
+    # לניטור: אם זה גבוה למקור מסוים, סימן שהתאריך לא חולץ והפריט לא
+    # יופיע ב-digest (סינון לפי תאריך פרסום).
+    missing_published_date: bool = False
 
 
 @dataclass
@@ -42,7 +46,33 @@ class BatchSummary:
     processed: int = 0
     skipped_noise: int = 0
     failed: int = 0
+    # כמה מתוך ה-processed יצאו בלי תאריך פרסום (לא יופיעו ב-digest).
+    missing_published_date: int = 0
     results: list[ItemResult] = field(default_factory=list)
+
+
+def _parse_gemini_published_date(
+    value: Any, *, now: datetime
+) -> datetime | None:
+    """פרסור קפדני של תאריך הפרסום שחזר מ-Gemini.
+
+    מקבל אך ורק `YYYY-MM-DD` (הפורמט שביקשנו ב-schema) ומחזיר datetime
+    tz-aware ב-UTC. כל ערך אחר (ריק, פורמט שונה, לא-מחרוזת) → None.
+    תאריך עתידי מעבר ליומיים קדימה נדחה — הגנה מפני hallucination של
+    המודל (יומיים buffer לפערי timezone).
+    """
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    try:
+        parsed = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if parsed > now + timedelta(days=2):
+        return None
+    return parsed
 
 
 def _db_write_failed_result(update_id: Any) -> ItemResult:
@@ -146,6 +176,7 @@ class AIProcessor:
             processed=sum(1 for r in results if r.status == "processed"),
             skipped_noise=sum(1 for r in results if r.status == "skipped_noise"),
             failed=sum(1 for r in results if r.status == "failed"),
+            missing_published_date=sum(1 for r in results if r.missing_published_date),
             results=results,
         )
 
@@ -155,6 +186,7 @@ class AIProcessor:
             processed=summary.processed,
             skipped_noise=summary.skipped_noise,
             failed=summary.failed,
+            missing_published_date=summary.missing_published_date,
         )
 
         # סיכום state — _write_state כבר עטוף ב-try/except פנימי
@@ -228,15 +260,31 @@ class AIProcessor:
                 return _db_write_failed_result(update_id)
             return ItemResult(update_id=update_id, status="skipped_noise")
 
-        # תוצאה תקינה
-        if not await self._safe_mark_processed(update_id, response):
-            # DB write נכשל אבל ה-AI הצליח. מסמנים failed כדי שlummary
+        # תוצאה תקינה. כלל קדימות לתאריך הפרסום: תאריך אמין מה-collector
+        # (RSS pubDate) מנצח; אחרת התאריך שחילץ Gemini; אחרת None.
+        existing_date = doc.get("source_published_at")
+        published_at = existing_date
+        if published_at is None:
+            published_at = _parse_gemini_published_date(
+                response.get("published_date"),
+                now=datetime.now(timezone.utc),
+            )
+
+        if not await self._safe_mark_processed(update_id, response, published_at):
+            # DB write נכשל אבל ה-AI הצליח. מסמנים failed כדי שsummary
             # יהיה מדויק; ה-item יישאר status="raw" וינסה שוב בריצה הבאה.
             return _db_write_failed_result(update_id)
-        return ItemResult(update_id=update_id, status="processed")
+        return ItemResult(
+            update_id=update_id,
+            status="processed",
+            missing_published_date=published_at is None,
+        )
 
     async def _safe_mark_processed(
-        self, update_id: Any, response: dict[str, Any]
+        self,
+        update_id: Any,
+        response: dict[str, Any],
+        published_at: datetime | None,
     ) -> bool:
         try:
             await self._db.updates.update_one(
@@ -247,6 +295,7 @@ class AIProcessor:
                         "severity": response.get("severity"),
                         "is_urgent": bool(response.get("is_urgent", False)),
                         "categories": list(response.get("categories", [])),
+                        "source_published_at": published_at,
                         "status": "processed",
                         "processed_at": datetime.now(timezone.utc),
                     }

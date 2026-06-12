@@ -1,7 +1,8 @@
 """שולח סיכום שבועי (Spec §8.2). תזמון: ראשון 08:00 שעון ישראל.
 
 לוגיקה לכל משתמש פעיל (לא paused, frequency=weekly):
-1. שלוף updates ב-7 ימים אחרונים, processed, מסונן ל-subscribed_apis ו-min_severity.
+1. שלוף updates שפורסמו (source_published_at) ב-7 ימים אחרונים, processed,
+   מסונן ל-subscribed_apis ו-min_severity.
 2. סנן פריטים שכבר נשלחו (urgent ב-24 השעות האחרונות).
 3. אם 0 → דלג (לא שולחים digest ריק — Spec §8.2).
 4. claim פר update_id, build digest, split if long, send.
@@ -36,6 +37,19 @@ SEVERITY_SETS: dict[str, set[str]] = {
     "important": {"critical", "important"},
     "all": {"critical", "important", "info"},
 }
+
+
+def _weekly_cutoff(now: datetime, lookback: timedelta) -> datetime:
+    """מחזיר את ה-cutoff ליום השבוע — מיושר ל-midnight UTC.
+
+    Gemini מחזיר תאריך פרסום ברזולוציית יום (YYYY-MM-DD → 00:00 UTC).
+    אם נשאיר את ה-cutoff עם שעת הריצה (למשל 10:00), פריט שפורסם ביום
+    הקצה התחתון של החלון יוכרז ב-00:00 UTC ויקבל "$gte 10:00" → ייפול
+    החוצה. יישור ל-midnight של אותו יום מבטיח שכל פריט שפורסם ביום
+    הקצה ייכלל.
+    """
+    raw = now - lookback
+    return raw.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 @dataclass
@@ -83,7 +97,7 @@ class WeeklyDispatcher:
             return summary
 
         summary.users_checked = len(users)
-        cutoff = started - self._lookback
+        cutoff = _weekly_cutoff(started, self._lookback)
         date_range = format_date_range(cutoff, started)
         logger.info("weekly.run.start", users=len(users))
 
@@ -131,7 +145,7 @@ class WeeklyDispatcher:
             return summary
 
         summary.users_checked = 1
-        cutoff = started - self._lookback
+        cutoff = _weekly_cutoff(started, self._lookback)
         date_range = format_date_range(cutoff, started)
         diagnostics: dict[str, Any] = {}
         summary.diagnostics = diagnostics
@@ -194,9 +208,9 @@ class WeeklyDispatcher:
                 "api_id": {"$in": subscribed},
                 "status": "processed",
                 "severity": {"$in": list(allowed_severities)},
-                "processed_at": {"$gte": cutoff},
+                "source_published_at": {"$gte": cutoff},
             }
-        ).sort("processed_at", -1)
+        ).sort("source_published_at", -1)
         candidates = await cursor.to_list(length=None)
         if diagnostics is not None:
             diagnostics["candidates"] = len(candidates)
