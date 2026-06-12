@@ -81,7 +81,13 @@ URL: {source_url}
 }}
 
 הנחיות לסיווג חומרה:
-- critical: deprecation עם תאריך תוקף, breaking change, security issue
+- critical:
+  • deprecation או shutdown עם תאריך תוקף קרוב
+  • breaking change (שינוי שובר תאימות)
+  • security issue (advisory/CVE)
+  • mandatory migration עם דדליין (גם בלי המילה "deprecation")
+  • credential/token invalidation (ביטול keys/tokens קיימים)
+  • הפחתה דרסטית של rate limit/quota שדורשת פעולה מיידית
 - important: תכונה משמעותית חדשה, שינוי תמחור, שינוי authentication
 - info: שיפורים, תכונות קטנות, תיקוני באגים
 
