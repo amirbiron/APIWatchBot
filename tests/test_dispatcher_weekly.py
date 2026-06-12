@@ -160,6 +160,31 @@ async def test_weekly_excludes_old_and_undated_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_weekly_includes_boundary_day_published_at_midnight() -> None:
+    """Gemini מחזיר תאריך ברזולוציית יום (YYYY-MM-DD → 00:00 UTC).
+    אם ה-cutoff נשאר עם שעת הריצה (למשל 10:00), פריט שפורסם ביום הקצה
+    התחתון של החלון נופל החוצה. ה-cutoff חייב להיות מיושר ל-midnight
+    של אותו יום כדי לכלול את כל פריטי הקצה."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"], min_severity="important")
+
+    now = datetime.now(timezone.utc)
+    # 7 ימים אחורה במדויק, ב-00:00 UTC — בדיוק כמו ש-Gemini היה מחזיר
+    # ליום הקצה. בלי יישור ה-cutoff ל-midnight, הפריט הזה היה מסונן.
+    boundary_midnight = (now - timedelta(days=7)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    await _insert_processed_update(
+        db, "render", severity="critical", source_published_at=boundary_midnight
+    )
+
+    summary = await WeeklyDispatcher(db=db, sender=sender).run()
+    assert summary.digests_sent == 1
+
+
+@pytest.mark.asyncio
 async def test_weekly_skips_paused_users() -> None:
     db = await _fresh_db()
     sender = _FakeSender()

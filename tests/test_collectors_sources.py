@@ -127,6 +127,35 @@ async def test_stripe_source_parses_table() -> None:
     assert all("Description" not in i.raw_content for i in items)
 
 
+def test_stripe_content_hash_stable_across_date_in_content_change() -> None:
+    """הוספת התאריך ל-raw_content (כדי ש-Gemini יראה אותו) לא תשנה
+    את ה-content_hash, אחרת פריטים קיימים ייווצרו מחדש ככפילויות בריצה
+    הבאה. ה-custom_hash_input מבטיח hash זהה לפני ואחרי השינוי."""
+    from app.collectors.base import RawItem
+
+    title = "Added new webhook…"
+    description = "Added new webhook event customer.subscription.trial_will_end"
+
+    # מצב ישן: raw_content = description בלבד, hash דיפולטיבי.
+    old = RawItem(
+        api_id="stripe",
+        raw_title=title,
+        raw_content=description,
+        source_url="https://x",
+    )
+
+    # מצב חדש: התאריך מוקדם לתוכן + custom_hash_input על "title::description".
+    new = RawItem(
+        api_id="stripe",
+        raw_title=title,
+        raw_content=f"2026-05-20\n{description}",
+        source_url="https://x",
+        custom_hash_input=f"{title}::{description}",
+    )
+
+    assert old.content_hash == new.content_hash
+
+
 @pytest.mark.asyncio
 async def test_google_business_parses_items() -> None:
     """3 כותרות h2 → 3 items. ה-h1 הראשי לא נחשב כפריט."""

@@ -39,6 +39,19 @@ SEVERITY_SETS: dict[str, set[str]] = {
 }
 
 
+def _weekly_cutoff(now: datetime, lookback: timedelta) -> datetime:
+    """מחזיר את ה-cutoff ליום השבוע — מיושר ל-midnight UTC.
+
+    Gemini מחזיר תאריך פרסום ברזולוציית יום (YYYY-MM-DD → 00:00 UTC).
+    אם נשאיר את ה-cutoff עם שעת הריצה (למשל 10:00), פריט שפורסם ביום
+    הקצה התחתון של החלון יוכרז ב-00:00 UTC ויקבל "$gte 10:00" → ייפול
+    החוצה. יישור ל-midnight של אותו יום מבטיח שכל פריט שפורסם ביום
+    הקצה ייכלל.
+    """
+    raw = now - lookback
+    return raw.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 @dataclass
 class WeeklyRunSummary:
     started_at: datetime
@@ -84,7 +97,7 @@ class WeeklyDispatcher:
             return summary
 
         summary.users_checked = len(users)
-        cutoff = started - self._lookback
+        cutoff = _weekly_cutoff(started, self._lookback)
         date_range = format_date_range(cutoff, started)
         logger.info("weekly.run.start", users=len(users))
 
@@ -132,7 +145,7 @@ class WeeklyDispatcher:
             return summary
 
         summary.users_checked = 1
-        cutoff = started - self._lookback
+        cutoff = _weekly_cutoff(started, self._lookback)
         date_range = format_date_range(cutoff, started)
         diagnostics: dict[str, Any] = {}
         summary.diagnostics = diagnostics

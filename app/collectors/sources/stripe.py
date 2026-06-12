@@ -55,6 +55,12 @@ class StripeSource(BaseSource):
                     raw_title=title,
                     raw_content=content,
                     source_url=self.source_url,
+                    # שומרים על אותו content_hash כמו לפני הוספת התאריך
+                    # לתוכן — אחרת פריטים קיימים במאגר יחשבו "חדשים"
+                    # בריצה הבאה וייוצרו כפילויות. ה-hash צריך להיות
+                    # פונקציה של ה-changelog row, לא של איך שאנחנו מציגים
+                    # אותו ל-AI.
+                    custom_hash_input=f"{title}::{description}",
                 )
             )
 
