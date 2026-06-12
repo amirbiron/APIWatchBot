@@ -221,16 +221,70 @@ async def test_urgent_min_severity_all_receives_info_urgent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_urgent_ignores_old_updates() -> None:
+async def test_urgent_ignores_updates_processed_long_ago() -> None:
+    """ה-cutoff ב-urgent הוא processed_at (מתי למדנו עליו). פריט שעובד
+    לפני 48h — מחוץ לחלון 24h, גם אם is_urgent."""
     db = await _fresh_db()
     sender = _FakeSender()
 
     await _insert_user(db, 1, subscribed=["render"])
-    # פורסם לפני 48 שעות — מחוץ לחלון 24 השעות
     await _insert_urgent_update(
         db,
         "render",
-        source_published_at=datetime.now(timezone.utc) - timedelta(hours=48),
+        processed_at=datetime.now(timezone.utc) - timedelta(hours=48),
+    )
+
+    summary = await UrgentDispatcher(db=db, sender=sender).run()
+    assert summary.updates_checked == 0
+    assert sender.sent == []
+
+
+@pytest.mark.asyncio
+async def test_urgent_dispatches_item_without_published_date() -> None:
+    """רגרסיה: פריט שעובד עכשיו אבל ללא תאריך פרסום (Gemini לא חילץ)
+    חייב להתריע — אחרת urgent יחמיץ פריטים בלי דייט."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"])
+    await _insert_urgent_update(db, "render", source_published_at=None)
+
+    summary = await UrgentDispatcher(db=db, sender=sender).run()
+    assert summary.messages_sent == 1
+
+
+@pytest.mark.asyncio
+async def test_urgent_dispatches_recently_processed_item_published_days_ago() -> None:
+    """רגרסיה: פריט שפורסם לפני 3 ימים אבל נסרק/עובד עכשיו (late
+    discovery) — חייב להתריע. ה-cutoff העיקרי הוא processed_at."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"])
+    await _insert_urgent_update(
+        db,
+        "render",
+        # פורסם לפני 3 ימים אבל processed_at = עכשיו (ברירת מחדל)
+        source_published_at=datetime.now(timezone.utc) - timedelta(days=3),
+    )
+
+    summary = await UrgentDispatcher(db=db, sender=sender).run()
+    assert summary.messages_sent == 1
+
+
+@pytest.mark.asyncio
+async def test_urgent_excludes_backfill_of_very_old_items() -> None:
+    """פריט מארכיון של ספק (פורסם לפני שנה) שנסרק עכשיו — לא נשלח
+    כ-urgent (היה דורש פעולה לפני זמן רב, לא רלוונטי כהתראה דחופה)."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"])
+    await _insert_urgent_update(
+        db,
+        "render",
+        # פורסם לפני שנה, אבל processed_at = עכשיו (backfill)
+        source_published_at=datetime.now(timezone.utc) - timedelta(days=365),
     )
 
     summary = await UrgentDispatcher(db=db, sender=sender).run()
