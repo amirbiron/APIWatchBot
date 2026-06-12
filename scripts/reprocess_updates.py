@@ -41,31 +41,42 @@ async def main() -> None:
     try:
         logger.info("reprocess.start", rss_api_ids=_RSS_API_IDS)
 
-        # 1. ניקוי שדות ה-AI + החזרה ל-raw לכל מי שעובד.
-        reset = await db.updates.update_many(
-            {"status": {"$in": _PROCESSED_STATUSES}},
+        # ניקוי שדות ה-AI + החזרה ל-raw, בשתי קבוצות *זרות* (לפי api_id).
+        # קריטי שכל מסמך ייגע בו פעם אחת בלבד ובפעולה אטומית אחת: אחרת,
+        # אם ה-worker מעבד פריט בין שתי קריאות, פעולה שנייה הייתה דורסת
+        # את התאריך שזה עתה חולץ. כאן non-RSS ו-RSS אינם חופפים, וכל
+        # קבוצה מקבלת את כל ה-$set בבת אחת.
+        _reset_fields = {
+            "status": "raw",
+            "summary_he": None,
+            "severity": None,
+            "is_urgent": False,
+            "categories": [],
+            "processed_at": None,
+        }
+
+        # מקורות HTML — מנקים גם source_published_at כדי ש-Gemini יחלץ מחדש.
+        reset_html = await db.updates.update_many(
             {
-                "$set": {
-                    "status": "raw",
-                    "summary_he": None,
-                    "severity": None,
-                    "is_urgent": False,
-                    "categories": [],
-                    "processed_at": None,
-                }
+                "status": {"$in": _PROCESSED_STATUSES},
+                "api_id": {"$nin": _RSS_API_IDS},
             },
+            {"$set": {**_reset_fields, "source_published_at": None}},
         )
 
-        # 2. ניקוי source_published_at למקורות HTML בלבד (RSS נשאר אמין).
-        cleared = await db.updates.update_many(
-            {"api_id": {"$nin": _RSS_API_IDS}},
-            {"$set": {"source_published_at": None}},
+        # מקורות RSS — משאירים את source_published_at (feedparser אמין).
+        reset_rss = await db.updates.update_many(
+            {
+                "status": {"$in": _PROCESSED_STATUSES},
+                "api_id": {"$in": _RSS_API_IDS},
+            },
+            {"$set": _reset_fields},
         )
 
         logger.info(
             "reprocess.done",
-            reset_to_raw=reset.modified_count,
-            html_dates_cleared=cleared.modified_count,
+            html_reset=reset_html.modified_count,
+            rss_reset=reset_rss.modified_count,
         )
     finally:
         await close_mongo_connection()

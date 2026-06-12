@@ -43,6 +43,17 @@ def test_looks_like_date_false_for_non_dates() -> None:
     assert looks_like_date(None) is False
 
 
+def test_looks_like_date_no_month_prefix_false_positives() -> None:
+    """מילים שמתחילות באותיות של חודש אך אינן חודש — לא תאריך.
+    קריטי ל-dedup של google_gemini (אחרת פריטים שונים מתמזגים)."""
+    assert looks_like_date("Marketing improvements") is False
+    assert looks_like_date("Marathon mode") is False
+    assert looks_like_date("Maybe later") is False
+    assert looks_like_date("Augmented reality") is False
+    assert looks_like_date("September") is True  # שם חודש מלא — כן
+    assert looks_like_date("Jan 2026") is True   # קיצור — כן
+
+
 @pytest.mark.asyncio
 async def test_parse_html_returns_parser() -> None:
     parser = await parse_html(b"<html><body><h1>hi</h1></body></html>")

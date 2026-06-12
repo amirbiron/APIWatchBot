@@ -100,10 +100,19 @@ def clean_text(value: Node | str | None) -> str:
 
 # זיהוי גס של "האם המחרוזת מכילה תאריך" — לא פרסור! משמש רק להחלטת
 # dedup (custom_hash) ב-google_gemini: כותרת שמכילה תאריך היא מפתח יציב
-# לפריט. שם חודש באנגלית או שנה בת 4 ספרות מספיקים. חילוץ התאריך עצמו
-# עבר לאחריות Gemini בשלב העיבוד (כלל קדימות ב-AIProcessor).
+# לפריט. שם חודש (מלא או קיצור 3 אותיות) או שנה בת 4 ספרות מספיקים.
+# חילוץ התאריך עצמו עבר לאחריות Gemini בשלב העיבוד.
+#
+# חשוב: מתאימים *שמות חודש שלמים* בלבד (`\b...\b`) ולא "כל מילה
+# שמתחילה ב-jan/mar/may". אחרת "Marketing"/"Marathon"/"Maybe" היו
+# מזוהים כתאריך, גורמים ל-custom_hash מבוסס-title בלבד, ושני פריטים
+# שונים עם אותה כותרת מטעה היו מתמזגים ל-hash אחד ונופלים כ-dup.
 _MONTH_NAME_RE = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
+    r"\b(?:"
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?"
+    r")\b",
     re.IGNORECASE,
 )
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
