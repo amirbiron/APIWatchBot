@@ -36,7 +36,7 @@ services:
   - type: worker
     name: api-watch-worker
     runtime: python
-    plan: standard
+    plan: starter
     region: frankfurt
     branch: main
     buildCommand: pip install -r requirements.txt
