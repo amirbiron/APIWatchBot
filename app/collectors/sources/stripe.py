@@ -12,7 +12,6 @@ from app.collectors.sources._html_utils import (
     clean_text,
     fetch_html,
     parse_html,
-    parse_iso_date,
 )
 from app.logging_config import get_logger
 
@@ -45,13 +44,17 @@ class StripeSource(BaseSource):
             # אם אין תיאור משמעותי. ה-AI ייצור title טוב יותר בשלב 3.
             title = description[:80] + ("…" if len(description) > 80 else "")
 
+            # התאריך של Stripe יושב ב-cell נפרד שלא נכלל ב-title/content.
+            # מקדימים אותו לתוכן כדי ש-Gemini יראה ויחלץ אותו ל-published_date
+            # (חילוץ התאריך עבר לאחריות ה-AI במקום פרסור ידני שביר).
+            content = f"{date_str}\n{description}" if date_str else description
+
             items.append(
                 RawItem(
                     api_id=self.api_id,
                     raw_title=title,
-                    raw_content=description,
+                    raw_content=content,
                     source_url=self.source_url,
-                    source_published_at=parse_iso_date(date_str),
                 )
             )
 

@@ -15,8 +15,8 @@ from app.collectors.base import BaseSource, RawItem
 from app.collectors.sources._html_utils import (
     extract_header_sections,
     fetch_html,
+    looks_like_date,
     parse_html,
-    parse_iso_date,
 )
 from app.logging_config import get_logger
 
@@ -38,10 +38,11 @@ class GoogleGeminiSource(BaseSource):
         for title, content in extract_header_sections(parser, _HEADER_TAGS):
             # ה-trick של Gemini: hash דטרמיניסטי לפי הכותרת (שמכילה תאריך).
             # מעדכן תוך-יומי לא יוצר כפילות; פריט עם תאריך חדש כן.
-            # אם אין תאריך parsable — fallback לדיפולט (None יחזיר להתנהגות
-            # רגילה של title+content).
-            date_in_title = parse_iso_date(title)
-            custom_hash = title if date_in_title is not None else None
+            # אם הכותרת לא נראית כמו תאריך — fallback לדיפולט (None יחזיר
+            # להתנהגות רגילה של title+content).
+            # חילוץ התאריך עצמו ל-source_published_at עבר ל-Gemini בשלב
+            # העיבוד — כאן רק מחליטים על מפתח ה-dedup.
+            custom_hash = title if looks_like_date(title) else None
 
             items.append(
                 RawItem(
@@ -49,7 +50,6 @@ class GoogleGeminiSource(BaseSource):
                     raw_title=title,
                     raw_content=content,
                     source_url=self.source_url,
-                    source_published_at=date_in_title,
                     custom_hash_input=custom_hash,
                 )
             )

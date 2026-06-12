@@ -61,20 +61,25 @@ async def _insert_processed_update(
     *,
     severity: str = "important",
     processed_at: datetime | None = None,
+    source_published_at: datetime | None = None,
 ) -> ObjectId:
+    now = datetime.now(timezone.utc)
+    # ה-dispatcher מסנן לפי source_published_at (תאריך פרסום), לא processed_at.
+    published = source_published_at or now
     result = await db.updates.insert_one(
         {
             "api_id": api_id,
             "raw_title": f"t-{severity}",
             "raw_content": "c",
             "source_url": "https://x",
-            "content_hash": f"h-{api_id}-{severity}-{processed_at}",
+            "content_hash": f"h-{api_id}-{severity}-{published}",
             "summary_he": f"סיכום {severity}",
             "severity": severity,
             "is_urgent": False,
             "categories": ["new_feature"],
             "status": "processed",
-            "processed_at": processed_at or datetime.now(timezone.utc),
+            "source_published_at": published,
+            "processed_at": processed_at or now,
         }
     )
     return result.inserted_id
@@ -112,6 +117,42 @@ async def test_weekly_skips_user_with_no_matches() -> None:
     await _insert_user(db, 1, subscribed=["render"])
     # אין updates של render במאגר
     await _insert_processed_update(db, "openai", severity="critical")
+
+    summary = await WeeklyDispatcher(db=db, sender=sender).run()
+    assert summary.digests_sent == 0
+    assert sender.sent == []
+
+
+@pytest.mark.asyncio
+async def test_weekly_excludes_old_and_undated_items() -> None:
+    """פריט שפורסם לפני יותר מ-7 ימים, או בלי תאריך פרסום, לא נכלל."""
+    db = await _fresh_db()
+    sender = _FakeSender()
+
+    await _insert_user(db, 1, subscribed=["render"], min_severity="important")
+
+    now = datetime.now(timezone.utc)
+    # פורסם לפני 30 יום — מחוץ לחלון
+    await _insert_processed_update(
+        db, "render", severity="critical", source_published_at=now - timedelta(days=30)
+    )
+    # בלי תאריך פרסום — לא טוענים שזה "מהשבוע"
+    await db.updates.insert_one(
+        {
+            "api_id": "render",
+            "raw_title": "no-date",
+            "raw_content": "c",
+            "source_url": "https://x",
+            "content_hash": "h-render-nodate",
+            "summary_he": "סיכום",
+            "severity": "critical",
+            "is_urgent": False,
+            "categories": [],
+            "status": "processed",
+            "source_published_at": None,
+            "processed_at": now,
+        }
+    )
 
     summary = await WeeklyDispatcher(db=db, sender=sender).run()
     assert summary.digests_sent == 0

@@ -33,7 +33,14 @@ def test_build_prompt_is_in_hebrew() -> None:
 def test_response_schema_required_fields() -> None:
     """כל השדות שה-processor מצפה אליהם חייבים להיות ב-required."""
     required = set(RESPONSE_SCHEMA["required"])
-    expected = {"is_noise", "summary_he", "severity", "is_urgent", "categories"}
+    expected = {
+        "is_noise",
+        "summary_he",
+        "severity",
+        "is_urgent",
+        "categories",
+        "published_date",
+    }
     assert required == expected
 
 

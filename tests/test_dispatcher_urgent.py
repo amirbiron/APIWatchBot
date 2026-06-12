@@ -58,20 +58,25 @@ async def _insert_urgent_update(
     api_id: str,
     *,
     processed_at: datetime | None = None,
+    source_published_at: datetime | None = None,
 ) -> ObjectId:
+    now = datetime.now(timezone.utc)
+    # ה-dispatcher מסנן לפי source_published_at (תאריך פרסום), לא processed_at.
+    published = source_published_at or now
     result = await db.updates.insert_one(
         {
             "api_id": api_id,
             "raw_title": "t",
             "raw_content": "c",
             "source_url": "https://x",
-            "content_hash": f"h-{api_id}-{processed_at}",
+            "content_hash": f"h-{api_id}-{published}",
             "summary_he": "סיכום דחוף",
             "severity": "critical",
             "is_urgent": True,
             "categories": ["deprecation"],
             "status": "processed",
-            "processed_at": processed_at or datetime.now(timezone.utc),
+            "source_published_at": published,
+            "processed_at": processed_at or now,
         }
     )
     return result.inserted_id
@@ -171,6 +176,7 @@ async def test_urgent_respects_user_min_severity() -> None:
             "is_urgent": True,
             "categories": ["new_feature"],
             "status": "processed",
+            "source_published_at": datetime.now(timezone.utc),
             "processed_at": datetime.now(timezone.utc),
         }
     )
@@ -205,6 +211,7 @@ async def test_urgent_min_severity_all_receives_info_urgent() -> None:
             "is_urgent": True,
             "categories": ["bugfix"],
             "status": "processed",
+            "source_published_at": datetime.now(timezone.utc),
             "processed_at": datetime.now(timezone.utc),
         }
     )
@@ -219,9 +226,11 @@ async def test_urgent_ignores_old_updates() -> None:
     sender = _FakeSender()
 
     await _insert_user(db, 1, subscribed=["render"])
-    # processed לפני 48 שעות — מחוץ לחלון 24 השעות
+    # פורסם לפני 48 שעות — מחוץ לחלון 24 השעות
     await _insert_urgent_update(
-        db, "render", processed_at=datetime.now(timezone.utc) - timedelta(hours=48)
+        db,
+        "render",
+        source_published_at=datetime.now(timezone.utc) - timedelta(hours=48),
     )
 
     summary = await UrgentDispatcher(db=db, sender=sender).run()

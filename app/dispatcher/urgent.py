@@ -1,7 +1,7 @@
 """שולח התראות מיידיות (Spec §8.1). תזמון: שעתי.
 
 לוגיקה:
-1. שלוף updates עם is_urgent=True, status=processed, processed_at ב-24h.
+1. שלוף updates עם is_urgent=True, status=processed, source_published_at ב-24h.
 2. עבור כל update — שלוף משתמשים מנויים שלא מושהים שמסכימים לדחוף.
 3. claim אטומי דרך delivery + send. במקרה כשל send — log + continue.
 """
@@ -92,7 +92,7 @@ class UrgentDispatcher:
             {
                 "is_urgent": True,
                 "status": "processed",
-                "processed_at": {"$gte": cutoff},
+                "source_published_at": {"$gte": cutoff},
             }
         )
         return await cursor.to_list(length=None)

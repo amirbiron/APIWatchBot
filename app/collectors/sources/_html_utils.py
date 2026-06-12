@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
 
 import httpx
 from selectolax.parser import HTMLParser, Node
@@ -99,34 +98,22 @@ def clean_text(value: Node | str | None) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-# פורמטים נפוצים שמופיעים באתרי changelog של Telegram/Stripe/Google.
-# סדר חשוב — מנסים מהמדויק לפחות-מדויק.
-_DATE_FORMATS = (
-    "%Y-%m-%d",
-    "%B %d, %Y",   # "May 20, 2026"
-    "%b %d, %Y",   # "May 20, 2026" (Stripe לפעמים מקצר)
-    "%d %B %Y",    # "20 May 2026"
-    "%d %b %Y",
-    "%Y/%m/%d",
+# זיהוי גס של "האם המחרוזת מכילה תאריך" — לא פרסור! משמש רק להחלטת
+# dedup (custom_hash) ב-google_gemini: כותרת שמכילה תאריך היא מפתח יציב
+# לפריט. שם חודש באנגלית או שנה בת 4 ספרות מספיקים. חילוץ התאריך עצמו
+# עבר לאחריות Gemini בשלב העיבוד (כלל קדימות ב-AIProcessor).
+_MONTH_NAME_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
+    re.IGNORECASE,
 )
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
 
-def parse_iso_date(value: str | None) -> datetime | None:
-    """מנסה לפרסר תאריך לפי פורמטים נפוצים. מחזיר tz-aware UTC או None.
-
-    מועדף לא לזרוק כשהפורמט לא מזוהה — פריט בלי source_published_at
-    עדיין שמיש (לא חוסם dedup ולא חוסם AI).
-    """
+def looks_like_date(value: str | None) -> bool:
+    """True אם המחרוזת נראית כמו תאריך (שם חודש או שנה). לא מפרסר."""
     if not value:
-        return None
-    s = value.strip()
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    logger.debug("html_utils.date_parse_failed", value=s)
-    return None
+        return False
+    return bool(_YEAR_RE.search(value) or _MONTH_NAME_RE.search(value))
 
 
 def extract_header_sections(

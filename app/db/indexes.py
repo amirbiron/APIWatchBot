@@ -37,6 +37,17 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
                 [("is_urgent", ASCENDING), ("processed_at", DESCENDING)],
                 name="urgent_processed_at",
             ),
+            # ה-dispatchers מסננים לפי source_published_at (תאריך הפרסום
+            # האמיתי) ולא processed_at. אינדקס ל-urgent (is_urgent+תאריך)
+            # ואינדקס כללי על התאריך ל-weekly.
+            IndexModel(
+                [("is_urgent", ASCENDING), ("source_published_at", DESCENDING)],
+                name="urgent_source_published_at",
+            ),
+            IndexModel(
+                [("source_published_at", DESCENDING)],
+                name="source_published_at",
+            ),
             IndexModel([("status", ASCENDING)], name="status"),
         ]
     )
